@@ -106,13 +106,14 @@ fn parse_match_attribs(
 
     let is_regex = match attribs.regexp().as_deref() {
         Some("yes") => true,
-        None => false,
+        // an explicit "no" behaves like no regexp
+        None | Some("no") => false,
         x => panic!("unknown regexp value {:?}", x),
     };
 
     let is_postag_regexp = match attribs.postag_regexp().as_deref() {
         Some("yes") => true,
-        None => false,
+        None | Some("no") => false,
         x => panic!("unknown postag_regexp value {:?}", x),
     };
 
@@ -234,6 +235,10 @@ fn parse_match_attribs(
         let value = match space_before.as_str() {
             "yes" => true,
             "no" => false,
+            // "ignore" behaves like not specifying the attribute
+            "ignore" => {
+                return Ok(AndAtom::and(atoms));
+            }
             _ => panic!("unknown spacebefore value {}", space_before),
         };
 
@@ -384,6 +389,48 @@ fn parse_token(
     Ok(parts)
 }
 
+/// Converts a Java regex replacement string (`$1`, `${name}`) to the syntax
+/// understood by the onig / fancy-regex backends (`\1`).
+fn java_replacement(replacement: &str) -> String {
+    let mut out = String::with_capacity(replacement.len());
+    let mut chars = replacement.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            if chars.peek() == Some(&'{') {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                    out.push(c);
+                }
+                out = format!("\\{}", out);
+            } else {
+                let mut digits = String::new();
+                while let Some(&d) = chars.peek() {
+                    if d.is_ascii_digit() {
+                        digits.push(d);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if digits.is_empty() {
+                    out.push('$');
+                } else {
+                    out.push('\\');
+                    out.push_str(&digits);
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+
+    out
+}
+
 fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Result<Match, Error> {
     let id = m
         .no
@@ -401,7 +448,11 @@ fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Re
             Some("yes") => Some(PosTagSelector::Regex {
                 regex: Regex::from_java_regex(&postag, true, true)?,
                 raw: postag.clone(),
-                replace: m.postag_replace,
+                replace: m.postag_replace
+                    .as_deref()
+                    .map(java_replacement)
+                    .map(Some)
+                    .unwrap_or(None),
             }),
             None => Some(PosTagSelector::Exact(postag)),
             x => panic!("unknown postag_regex value {:?}", x),
@@ -413,13 +464,13 @@ fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Re
     let regex_replacer = match (m.regexp_match, m.regexp_replace) {
         (Some(regex_match), Some(regex_replace)) => Some((
             Regex::from_java_regex(&regex_match, false, true)?,
-            regex_replace,
+            java_replacement(&regex_replace),
         )),
         _ => None,
     };
 
     let include_skipped = match m.include_skipped.as_deref() {
-        None => None,
+        None | Some("none") => None,
         Some("all") => Some(IncludeSkipped::All),
         Some("following") => Some(IncludeSkipped::Following),
         x => panic!("unknown include_skipped value {:?}", x),
@@ -1011,16 +1062,25 @@ impl DisambiguationRule {
         let word_datas: Vec<_> = if let Some(wds) = data.disambig.word_datas {
             wds.into_iter()
                 .map(|part| match part {
-                    structure::DisambiguationPart::WordData(x) => {
-                        either::Left(owned::WordData::from_structure(x, info))
-                    }
-                    structure::DisambiguationPart::Match(x) => either::Right(parse_pos_filter(
-                        &x.postag.unwrap(),
-                        x.postag_regexp.as_deref(),
-                        info,
+                    structure::DisambiguationPart::WordData(x) => Ok(either::Left(
+                        owned::WordData::from_structure(x, info),
                     )),
+                    structure::DisambiguationPart::Match(x) => {
+                        if x.content.is_some() {
+                            return Err(Error::Unimplemented(
+                                "text content in `match` of a disambiguation is not supported."
+                                    .into(),
+                            ));
+                        }
+
+                        Ok(either::Right(parse_pos_filter(
+                            &x.postag.clone().expect("match must have a postag"),
+                            x.postag_regexp.as_deref(),
+                            info,
+                        )))
+                    }
                 })
-                .collect()
+                .collect::<Result<Vec<_>, Error>>()?
         } else {
             Vec::new()
         };
@@ -1036,18 +1096,22 @@ impl DisambiguationRule {
                 }
             }
             Some("add") => {
-                if data.disambig.postag.is_some() {
-                    return Err(Error::Unimplemented(
-                        "postag not supported for `add`.".into(),
-                    ));
+                if let Some(postag) = data.disambig.postag.as_ref() {
+                    // add a reading with the given POS; the lemma defaults to the
+                    // matched token text at runtime (see Disambiguation::Add)
+                    let lemma = info.tagger.id_word("".into()).to_owned_id();
+                    let pos = info.tagger.id_tag(postag).to_owned_id();
+                    Ok(Disambiguation::Add(vec![owned::WordData::new(
+                        lemma, pos,
+                    )]))
+                } else {
+                    Ok(Disambiguation::Add(
+                        word_datas
+                            .into_iter()
+                            .map(|x| x.left().expect("match not supported for `add`"))
+                            .collect(),
+                    ))
                 }
-
-                Ok(Disambiguation::Add(
-                    word_datas
-                        .into_iter()
-                        .map(|x| x.left().expect("match not supported for `add`"))
-                        .collect(),
-                ))
             }
             Some("replace") => Ok(Disambiguation::Replace(
                 word_datas
@@ -1211,12 +1275,14 @@ impl DisambiguationRule {
             let args = filter_data
                 .args
                 .split(' ')
-                .map(|x| {
-                    let idx = x.find(':').unwrap();
-                    (
-                        x[..idx].to_string(),
-                        x[(idx + ':'.len_utf8())..].to_string(),
-                    )
+                .filter_map(|x| {
+                    // tolerate arguments without a `key:value` shape
+                    x.find(':').map(|idx| {
+                        (
+                            x[..idx].to_string(),
+                            x[(idx + ':'.len_utf8())..].to_string(),
+                        )
+                    })
                 })
                 .collect();
 

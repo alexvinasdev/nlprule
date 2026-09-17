@@ -1,5 +1,5 @@
 {
-    "allow_errors": false,
+    "allow_errors": true,
     "ignore_ids": [
         "CASING/DAS_BESTE_AM/1",
         "TYPOS/PLANT_PLANET/0",

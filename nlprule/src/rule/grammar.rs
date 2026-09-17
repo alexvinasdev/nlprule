@@ -272,15 +272,19 @@ impl Match {
                             );
                             if !target.is_empty() {
                                 // the target tag is used as a regular expression itself,
-                                // mirroring synthesize(token, target, true)
+                                // mirroring synthesize(token, target, true).
+                                // it can contain syntax not valid for the regex backend
+                                // (e.g. leftover backreferences); fall back instead of panicking
                                 let regex = Regex::new(format!("^(?:{})$", target));
-                                let mut set: Vec<String> = synth_readings
-                                    .iter()
-                                    .flat_map(|lemma| synth.synthesize_regex(lemma, &regex))
-                                    .collect();
-                                set.sort();
-                                set.dedup();
-                                word_forms = set;
+                                if regex.try_compile().is_ok() {
+                                    let mut set: Vec<String> = synth_readings
+                                        .iter()
+                                        .flat_map(|lemma| synth.synthesize_regex(lemma, &regex))
+                                        .collect();
+                                    set.sort();
+                                    set.dedup();
+                                    word_forms = set;
+                                }
                             }
                         }
 

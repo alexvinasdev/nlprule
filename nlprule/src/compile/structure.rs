@@ -567,6 +567,9 @@ pub struct DisambiguationMatch {
     pub no: usize,
     pub postag: Option<String>,
     pub postag_regexp: Option<String>,
+    /// Element content: the literal text the referenced token must have.
+    #[serde(rename = "$value")]
+    pub content: Option<XmlString>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

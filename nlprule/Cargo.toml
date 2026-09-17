@@ -81,7 +81,7 @@ compile = [
     "roxmltree",
     "serde_json",
     "srx/from_xml",
-    "regex-all-test",
+    "regex-onig",
 ]
 
 [[bin]]

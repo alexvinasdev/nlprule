@@ -41,6 +41,9 @@ impl Tagger {
         let mut disallowed: Vec<String> = Vec::new();
 
         for path in remove_paths {
+            if !path.as_ref().exists() {
+                continue;
+            }
             let file = File::open(path.as_ref())?;
             let reader = std::io::BufReader::new(file);
 
@@ -55,20 +58,31 @@ impl Tagger {
         }
 
         for path in paths {
+            if !path.as_ref().exists() {
+                continue;
+            }
             let file = File::open(path.as_ref())?;
             let reader = std::io::BufReader::new(file);
 
             for line in reader.lines() {
                 let line = line?;
-                if line.starts_with('#') {
+                // comments may be indented
+                let line = line.trim_start();
+                if line.starts_with('#') || line.is_empty() {
                     continue;
                 }
 
-                if disallowed.contains(&line) {
+                if disallowed.iter().any(|x| x == line) {
                     continue;
                 }
 
                 let parts: Vec<_> = line.split('\t').collect();
+
+                if parts.len() < 3 {
+                    // tolerate malformed lines (e.g. word without tag)
+                    log::warn!("skipping malformed dictionary line: {:?}", line);
+                    continue;
+                }
 
                 let word = parts[0].to_string();
                 let inflection = parts[1].to_string();
@@ -129,7 +143,12 @@ impl Tagger {
         let mut tag_store: Vec<_> = tag_store.into_iter().collect();
         tag_store.sort_unstable();
 
-        // add special part of speech tags, they must have ids starting from zero
+        // add special part of speech tags, they must have ids starting from zero.
+        // remove them first: if e.g. "UNKNOWN" is already a regular tag, naively
+        // inserting would create a duplicate entry and break the BiMap (ids would
+        // no longer be dense)
+        let specials: Vec<_> = SpecialPos::iter().collect::<Vec<_>>();
+        tag_store.retain(|tag| !specials.iter().any(|s| s == tag));
         for (i, special_pos) in SpecialPos::iter().enumerate() {
             tag_store.insert(i, special_pos);
         }
@@ -179,21 +198,51 @@ impl MultiwordTagger {
         let reader = BufReader::new(File::open(dump.as_ref())?);
         let mut multiwords = Vec::new();
 
+        // some languages declare a custom separator e.g. `#separatorRegExp=[\t;]`
+        let mut separators: Vec<char> = vec!['\t'];
+
         for line in reader.lines() {
             let line = line?;
+
+            // the separator declaration must be checked before comment stripping
+            // (the line itself starts with '#')
+            if let Some(rest) = line.trim().strip_prefix("separatorRegExp=[") {
+                if let Some(end) = rest.strip_suffix(']') {
+                    // the declaration is a regex char class; translate `\t` to a tab
+                    separators = end
+                        .replace("\\t", "\t")
+                        .chars()
+                        .filter(|c| *c != '\\')
+                        .collect();
+                    if separators.is_empty() {
+                        separators = vec!['\t'];
+                    }
+                    continue;
+                }
+            }
 
             // strip comments
             let line = &line[..line.find('#').unwrap_or_else(|| line.len())].trim();
             if line.is_empty() {
                 continue;
             }
-            let tab_split: Vec<_> = line.split('\t').collect();
 
-            let word: String = tab_split[0]
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let pos = info.tagger().id_tag(tab_split[1]).to_owned_id();
+            // split at the first separator occurrence
+            let split = separators
+                .iter()
+                .filter_map(|sep| line.find(*sep).map(|idx| (idx, *sep)))
+                .min_by_key(|(idx, _)| *idx);
+
+            let (word, pos) = match split {
+                Some((idx, sep)) => (&line[..idx], &line[idx + sep.len_utf8()..]),
+                None => {
+                    log::warn!("skipping malformed multiword line: {:?}", line);
+                    continue;
+                }
+            };
+
+            let word: String = word.split_whitespace().collect::<Vec<_>>().join(" ");
+            let pos = info.tagger().id_tag(pos.trim()).to_owned_id();
             multiwords.push((word, pos));
         }
 

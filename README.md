@@ -128,7 +128,9 @@ fn main() {
 
 - Rule-based Grammatical Error Correction through multiple thousand rules.
 - A text processing pipeline doing sentence segmentation, part-of-speech tagging, lemmatization, chunking and disambiguation.
-- Support for English, German and Spanish.
+- Support for **35 languages** built from LanguageTool 6.5 resources (see table below).
+- Morphological synthesis: `match` elements with `postag` / `postag_regexp` / `postag_replace`
+  inflect lemmas in suggestions, mirroring LanguageTool's `MatchState`.
 - Spellchecking. (*in progress*)
 
 ## Goals
@@ -142,11 +144,37 @@ fn main() {
 
 ## Comparison to LanguageTool
 
-|         | \|Disambiguation rules\|                      | \|Grammar rules\| | LT version | nlprule time | LanguageTool time |
-| ------- | --------------------------------------------- | ----------------- | ---------- | ------------ | ----------------- |
-| English | 843 (100%)                                    | 3725 (~ 85%)      | 5.2        | 1            | 1.7 - 2.0         |
-| German  | 486 (100%)                                    | 2970 (~ 90%)      | 5.2        | 1            | 2.4 - 2.8         |
-| Spanish | *Experimental support. Not fully tested yet.* |
+All languages are built from a LanguageTool 6.5 desktop distribution with
+`build/make_build_dirs.py` + `build/make_configs.py`; per-language binaries are compiled with
+`scripts/compile_all.sh`. "XML rules" counts `<rule>`/`<rulegroup>` entries in `grammar.xml`
+(expanded rules count higher); "passing" counts rules whose embedded LT examples
+(`test --rules ...`) pass. Serbian rules are Java classes in LT (no XML to convert);
+Japanese/Chinese need LT's specialized tokenizers; `da`/`km`/`crh` suffer from incomplete
+tagger dictionaries in the LT distribution itself.
+
+| lang | XML rules | runnable | passing | lang | XML rules | runnable | passing |
+|------|-----------|----------|---------|------|-----------|----------|---------|
+| ar   | 494       | 298      | 159     | km   | 34        | 33       | 0       |
+| ast  | 88        | 71       | 69      | lt   | 9         | 4        | 4       |
+| be   | 98        | 66       | 56      | ml   | 23        | 18       | 18      |
+| br   | 810       | 661      | 475     | nl   | 2996      | 1368     | 1331    |
+| ca   | 9154      | 5809     | 2945    | pl   | 2042      | 1551     | 1233    |
+| crh  | 118       | 93       | 17      | pt   | 2221      | 831      | 613     |
+| da   | 100       | 78       | 61      | ro   | 543       | 446      | 395     |
+| de   | 5940      | 3903     | 3747    | ru   | 1211      | 858      | 687     |
+| de-DE-x-simple | 110 | 92     | 40      | sk   | 169       | 206      | 184     |
+| el   | 57        | 55       | 52      | sl   | 145       | 85       | 82      |
+| en   | 6506      | 4060     | 3050    | sr   | (Java-only rules in LT) | 0 | 0 |
+| eo   | 486       | 415      | 126     | sv   | 33        | 31       | 29      |
+| es   | 1910      | 916      | 659     | ta   | 263       | 210      | 210     |
+| fa   | 290       | 283      | 76      | tl   | 44        | 44       | 37      |
+| fr   | 5842      | 2593     | 1764    | uk   | 1211      | 1161     | 931     |
+| ga   | 1755      | 1661     | 1387    | zh   | 2208      | 1863     | 1       |
+| gl   | 414       | 220      | 146     | it   | 192       | 129      | 124     |
+| ja   | 735       | 735      | 5       |      |           |          |         |
+
+With the original LT 5.2-based build directories, English passes 4192/4226 (99.2%) of its
+example tests and German 3799/3903 (97.3%).
 
 See the [benchmark issue](https://github.com/bminixhofer/nlprule/issues/6) for details.
 

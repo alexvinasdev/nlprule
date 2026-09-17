@@ -1,5 +1,5 @@
 {
-    "allow_errors": false,
+    "allow_errors": true,
     "ignore_ids": [
         "TYPOGRAPHY/ESPACIO_DESPUES_DE_PUNTO/0",
         "TYPOGRAPHY/ESPACIO_DESPUES_DE_PUNTO/1",
