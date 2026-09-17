@@ -38,6 +38,8 @@ impl Default for RulesLangOptions {
 #[derive(Serialize, Deserialize, Default)]
 pub struct Rules {
     pub(crate) rules: Vec<Rule>,
+    /// Shared morphological synthesizer used by rules to inflect lemmas in suggestions.
+    pub(crate) synth: Option<std::sync::Arc<crate::rule::synthesizer::Synthesizer>>,
 }
 
 impl Rules {
@@ -65,6 +67,12 @@ impl Rules {
     /// All rules ordered by priority.
     pub fn rules(&self) -> &[Rule] {
         &self.rules
+    }
+
+    /// The shared morphological synthesizer used by rules to inflect lemmas
+    /// in suggestions, if this language has a synthesis dictionary.
+    pub fn synthesizer(&self) -> Option<&std::sync::Arc<crate::rule::synthesizer::Synthesizer>> {
+        self.synth.as_ref()
     }
 
     /// All rules ordered by priority (mutable).
@@ -100,7 +108,7 @@ impl Rules {
             .map(|(i, rule)| {
                 let mut output = Vec::new();
 
-                for suggestion in rule.apply(&sentence) {
+                for suggestion in rule.apply_with_synth(&sentence, self.synth.as_deref()) {
                     output.push((i, suggestion));
                 }
 
@@ -222,6 +230,9 @@ where
 {
     fn from_iter<I: IntoIterator<Item = R>>(iter: I) -> Self {
         let rules: Vec<Rule> = iter.into_iter().map(|x| x.into()).collect();
-        Self { rules }
+        Self {
+            rules,
+            synth: None,
+        }
     }
 }

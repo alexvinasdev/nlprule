@@ -38,6 +38,8 @@ struct BuildFilePaths {
     common_words_path: PathBuf,
     regex_cache_path: PathBuf,
     srx_path: PathBuf,
+    synth_dump_path: PathBuf,
+    do_not_synthesize_path: PathBuf,
 }
 
 impl BuildFilePaths {
@@ -54,6 +56,8 @@ impl BuildFilePaths {
             common_words_path: p.join("common.txt"),
             regex_cache_path: p.join("regex_cache.bin"),
             srx_path: p.join("segment.srx"),
+            synth_dump_path: p.join("tags/synth.dump"),
+            do_not_synthesize_path: p.join("tags/do-not-synthesize.txt"),
         }
     }
 }
@@ -157,6 +161,34 @@ pub fn compile(
     };
 
     let mut build_info = BuildInfo::new(Arc::new(tagger), regex_cache);
+
+    // build the morphological synthesizer (used to inflect lemmas in suggestions)
+    // from the synth dictionary dump and the manual addition / removal lists
+    let synth_kind = match lang_code.trim() {
+        "de" => crate::rule::synthesizer::SynthesizerKind::German,
+        _ => crate::rule::synthesizer::SynthesizerKind::Default,
+    };
+    let synthesizer = crate::rule::synthesizer::Synthesizer::from_dumps(
+        &paths.synth_dump_path,
+        &[
+            paths.tag_paths[1].clone(),
+            paths.tag_remove_paths[0].clone(),
+            paths.do_not_synthesize_path.clone(),
+        ],
+        synth_kind,
+    );
+
+    if synthesizer.is_empty() {
+        info!(
+            "No synthesis dictionary found at {}. `match` elements with a `postag` \
+             will fall back to the plain token text.",
+            paths.synth_dump_path.display()
+        );
+    } else {
+        info!("Built morphological synthesizer.");
+    }
+
+    build_info.set_synthesizer(Some(Arc::new(synthesizer)));
     let chunker = if paths.chunker_path.exists() {
         info!("{} exists. Building chunker.", paths.chunker_path.display());
         let reader = BufReader::new(File::open(paths.chunker_path)?);

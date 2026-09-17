@@ -247,6 +247,9 @@ pub struct Match {
     pub case_conversion: Option<String>,
     pub regexp_match: Option<String>,
     pub regexp_replace: Option<String>,
+    /// Element content used as a static lemma, e.g. `<match no="1" postag="VBN">word</match>`.
+    #[serde(rename = "$value")]
+    pub content: Option<XmlString>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -498,6 +501,11 @@ pub struct Rule {
     pub url: Option<XmlText>,
     pub default: Option<String>,
     pub filter: Option<Filter>,
+    /// Rule metadata tag (LT 6.x); accepted but unused.
+    pub tags: Option<String>,
+    /// Rule type attribute (LT 6.x, e.g. 'personal'); accepted but unused.
+    #[serde(rename = "type")]
+    pub rule_type: Option<String>,
     #[serde(rename = "__unused_unifications")]
     pub unifications: Option<Vec<Unification>>,
 }
@@ -510,6 +518,8 @@ pub struct RuleGroup {
     pub antipatterns: Option<Vec<Pattern>>,
     pub default: Option<String>,
     pub name: String,
+    /// Rule metadata tag (LT 6.x); accepted but unused.
+    pub tags: Option<String>,
     pub short: Option<XmlText>,
     pub url: Option<XmlText>,
     #[serde(rename = "rule")]

@@ -1,7 +1,7 @@
-use clap::Clap;
+use clap::Parser;
 use nlprule::{rules::Rules, tokenizer::Tokenizer};
 
-#[derive(Clap)]
+#[derive(Parser)]
 #[clap(
     version = "1.0",
     author = "Benjamin Minixhofer <bminixhofer@gmail.com>"
@@ -28,7 +28,7 @@ fn main() {
     let mut passes = 0;
     for rule in rules {
         if opts.ids.is_empty() || opts.ids.contains(&rule.id().to_string()) {
-            passes += rule.test(&tokenizer) as usize;
+            passes += rule.test_with_synth(&tokenizer, rules_container.synthesizer().map(|x| &**x)) as usize;
         }
     }
 

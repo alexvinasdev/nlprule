@@ -352,7 +352,10 @@ impl Rules {
             );
         }
 
-        Rules { rules }
+        Rules {
+            rules,
+            synth: build_info.synthesizer().cloned(),
+        }
     }
 }
 

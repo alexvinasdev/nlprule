@@ -1,4 +1,5 @@
-use super::engine::composition::{GraphId, MatchGraph, MatchSentence, PosMatcher};
+use super::engine::composition::{GraphId, MatchGraph, MatchSentence};
+use super::synthesizer::Synthesizer as MorphSynthesizer;
 use crate::types::*;
 use crate::utils::{self, regex::Regex};
 use serde::{Deserialize, Serialize};
@@ -10,18 +11,58 @@ pub enum Conversion {
     StartLower,
     AllUpper,
     StartUpper,
+    /// Copy the case of a sample string.
+    Preserve,
+    /// Lowercase everything, then uppercase the first char.
+    FirstUpper,
+    /// Remove Arabic diacritics (tashkeel).
+    NotAshkeel,
 }
 
 impl Conversion {
-    fn convert(&self, input: &str) -> String {
+    /// Converts the case of `input` using `sample` as the case sample
+    /// (only used by `Preserve`). Mirrors `CaseConversionHelper.convertCase`.
+    fn convert(&self, input: &str, sample: &str) -> String {
+        if input.is_empty() {
+            return input.to_string();
+        }
         match &self {
             Conversion::Nop => input.to_string(),
             Conversion::AllLower => input.to_lowercase(),
             Conversion::StartLower => utils::apply_to_first(input, |c| c.to_lowercase().collect()),
             Conversion::AllUpper => input.to_uppercase(),
             Conversion::StartUpper => utils::apply_to_first(input, |c| c.to_uppercase().collect()),
+            Conversion::Preserve => {
+                let starts_upper = sample.chars().next().map_or(false, |c| c.is_uppercase());
+
+                if starts_upper {
+                    // StringTools.isAllUppercase: all cased chars are uppercase and length > 1
+                    let has_lowercase = sample.chars().any(|c| c.is_lowercase());
+                    let len = sample.chars().count();
+
+                    if len > 1 && !has_lowercase {
+                        input.to_uppercase()
+                    } else {
+                        utils::apply_to_first(input, |c| c.to_uppercase().collect())
+                    }
+                } else {
+                    input.to_string()
+                }
+            }
+            Conversion::FirstUpper => {
+                utils::apply_to_first(&input.to_lowercase(), |c| c.to_uppercase().collect())
+            }
+            Conversion::NotAshkeel => strip_tashkeel(input),
         }
     }
+}
+
+fn strip_tashkeel(input: &str) -> String {
+    // Arabic diacritics (tashkeel) Unicode block
+    input
+        .chars()
+        .filter(|c| !('\u{064B}'..='\u{0652}').contains(c))
+        .collect()
 }
 
 /// An example associated with a [Rule][crate::rule::Rule].
@@ -29,6 +70,9 @@ impl Conversion {
 pub struct Example {
     pub(crate) text: String,
     pub(crate) suggestion: Option<Suggestion>,
+    /// The `type` attribute: 'triggers_error' examples expect the rule to match
+    /// (without checking the replacement).
+    pub(crate) kind: Option<String>,
 }
 
 impl Example {
@@ -45,48 +89,267 @@ impl Example {
     }
 }
 
+/// A POS tag (or POS tag regular expression) a [Match] synthesizes forms for.
+/// Mirrors the `postag`, `postag_regexp` and `postag_replace` attributes
+/// of LanguageTool's `match` element.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PosReplacer {
-    pub(crate) matcher: PosMatcher,
+pub enum PosTagSelector {
+    /// An exact POS tag.
+    Exact(String),
+    /// A regular expression over POS tags (full match), with an optional replacement
+    /// applied to matched tags (Java `replaceAll` semantics).
+    Regex {
+        regex: Regex,
+        /// The raw postag string; used as the synthesis target when no reading
+        /// matches (mirroring `MatchState.getTargetPosTag`'s empty fallback).
+        raw: String,
+        replace: Option<String>,
+    },
 }
 
-impl PosReplacer {
-    fn apply(&self, _text: &str, _sentence: &MatchSentence) -> Option<String> {
-        // TODO: needs to be implemented with correct ordering, currently rules which would need this are disabled
-        unimplemented!()
+impl PosTagSelector {
+    /// Mirrors `MatchState.getTargetPosTag`: computes the POS tag used as the
+    /// synthesis target from the POS tags of the matched token's readings.
+    fn target_pos_tag(
+        &self,
+        pos_tags: &[String],
+        synth: &MorphSynthesizer,
+        static_lemma: bool,
+    ) -> String {
+        match self {
+            PosTagSelector::Exact(tag) => tag.clone(),
+            PosTagSelector::Regex {
+                regex,
+                raw,
+                replace,
+            } => {
+                let matching: Vec<&str> = pos_tags
+                    .iter()
+                    .filter(|tag| regex.is_match(tag))
+                    .map(|tag| tag.as_str())
+                    .collect();
+
+                if matching.is_empty() {
+                    // mirror Java: the raw postag string is used as the target,
+                    // later interpreted as a regular expression for the synthesis
+                    return raw.clone();
+                }
+
+                let target = synth.get_target_pos_tag(&matching, "");
+
+                match replace {
+                    Some(replace) if static_lemma => {
+                        // only the (last) target tag is replaced
+                        regex.replace_all(&target, replace)
+                    }
+                    Some(replace) => {
+                        // each matched tag is replaced, joined as an alternation
+                        matching
+                            .iter()
+                            .map(|tag| regex.replace_all(tag, replace))
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    }
+                    _ => target,
+                }
+            }
+        }
     }
 }
 
+/// Mirrors LanguageTool's `Match` (the XML `match` element inside suggestions and messages):
+/// formats a matched token into the string(s) used in a suggestion.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Match {
     pub(crate) id: GraphId,
     pub(crate) conversion: Conversion,
-    pub(crate) pos_replacer: Option<PosReplacer>,
     pub(crate) regex_replacer: Option<(Regex, String)>,
+    /// `postag` (+ `postag_regexp`, `postag_replace`): synthesize a form of the matched
+    /// token with the target POS tag.
+    pub(crate) postag: Option<PosTagSelector>,
+    /// Element content used as a static lemma which is synthesized
+    /// (e.g. `<match no="1" postag="VBN">word</match>`).
+    pub(crate) static_lemma: Option<String>,
+    /// The `text` attribute: a literal replacement text.
+    pub(crate) text: Option<String>,
+    /// Whether skipped tokens (between this element and the next pattern element) are
+    /// appended to the output (`include_skipped="all"`), or whether *only* the skipped
+    /// tokens are output (`include_skipped="following"`).
+    pub(crate) include_skipped: Option<IncludeSkipped>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncludeSkipped {
+    /// Output only the skipped tokens.
+    Following,
+    /// Output the token text followed by the skipped tokens.
+    All,
+}
+
+/// POS tags marking special pseudo-readings. Synthesis is skipped for these
+/// (mirroring `toFinalString`'s `oneForm` handling).
+const SPECIAL_TAGS: [&str; 3] = ["SENT_START", "SENT_END", "PARAGRAPH_END"];
+
 impl Match {
-    fn apply(&self, sentence: &MatchSentence, graph: &MatchGraph) -> Option<String> {
-        let text = graph.by_id(self.id).text(sentence);
+    /// Formats the referenced token into the string(s) to use in a suggestion.
+    /// Mirrors `MatchState.toFinalString`. Returns possibly multiple forms
+    /// (synthesis can produce more than one word form).
+    pub(crate) fn apply(
+        &self,
+        sentence: &MatchSentence,
+        graph: &MatchGraph,
+        synth: Option<&MorphSynthesizer>,
+    ) -> Vec<String> {
+        let token_text = graph.by_id(self.id).text(sentence).to_string();
 
-        let mut text = if let Some(replacer) = &self.pos_replacer {
-            replacer.apply(text, sentence)?
-        } else {
-            text.to_string()
+        // the base text: a literal text, the static lemma or the token text
+        let original = match (&self.text, &self.static_lemma) {
+            (Some(text), _) => text.clone(),
+            (None, Some(lemma)) => lemma.clone(),
+            (None, None) => token_text.clone(),
         };
 
-        text = if let Some((regex, replacement)) = &self.regex_replacer {
-            regex.replace_all(&text, replacement)
-        } else {
-            text
-        };
+        let mut forms = vec![original.clone()];
 
-        // TODO: maybe return a vector here and propagate accordingly
-        Some(self.conversion.convert(&text))
+        if let Some((regex, replacement)) = &self.regex_replacer {
+            forms = forms
+                .into_iter()
+                .map(|form| regex.replace_all(&form, replacement))
+                .collect();
+        }
+
+        if let Some(postag) = &self.postag {
+            if let Some(synth) = synth {
+                // the POS tags of the matched token's (real) readings
+                let pos_tags: Vec<String> = graph
+                    .by_id(self.id)
+                    .tokens(sentence)
+                    .flat_map(|token| {
+                        token
+                            .word()
+                            .tags()
+                            .iter()
+                            .map(|tag| tag.pos().as_str().to_string())
+                    })
+                    .filter(|pos| !SPECIAL_TAGS.contains(&pos.as_str()))
+                    .collect();
+
+                // the readings used for synthesis: the static lemma (single pseudo-reading),
+                // or the token's readings
+                let synth_readings: Vec<String> = match &self.static_lemma {
+                    Some(lemma) => vec![lemma.clone()],
+                    None => graph
+                        .by_id(self.id)
+                        .tokens(sentence)
+                        .flat_map(|token| {
+                            token
+                                .word()
+                                .tags()
+                                .iter()
+                                .map(|tag| tag.lemma().as_str().to_string())
+                        })
+                        .collect(),
+                };
+
+                let mut word_forms: Vec<String> = Vec::new();
+
+                match postag {
+                    PosTagSelector::Exact(tag) => {
+                        let mut set: Vec<String> = synth_readings
+                            .iter()
+                            .flat_map(|lemma| synth.lookup(lemma, tag))
+                            .collect();
+                        set.sort();
+                        set.dedup();
+                        word_forms = set;
+                    }
+                    PosTagSelector::Regex { .. } => {
+                        {
+                            let target = postag.target_pos_tag(
+                                &pos_tags,
+                                synth,
+                                self.static_lemma.is_some(),
+                            );
+                            if !target.is_empty() {
+                                // the target tag is used as a regular expression itself,
+                                // mirroring synthesize(token, target, true)
+                                let regex = Regex::new(format!("^(?:{})$", target));
+                                let mut set: Vec<String> = synth_readings
+                                    .iter()
+                                    .flat_map(|lemma| synth.synthesize_regex(lemma, &regex))
+                                    .collect();
+                                set.sort();
+                                set.dedup();
+                                word_forms = set;
+                            }
+                        }
+
+                        if word_forms.is_empty() {
+                            // no form could be synthesized: LT marks this by parenthesizing the token
+                            word_forms = vec![format!("({})", token_text)];
+                        }
+                    }
+                }
+
+                if word_forms.is_empty() {
+                    // exact synthesis found nothing: fall back to the plain token text
+                    word_forms = vec![token_text.clone()];
+                }
+
+                forms = word_forms;
+            }
+        }
+
+        // apply the case conversion using the original text as the sample
+        forms = forms
+            .into_iter()
+            .map(|form| self.conversion.convert(&form, &original))
+            .collect();
+
+        // append skipped tokens if requested
+        if self.include_skipped.is_some() {
+            let skipped = skipped_tokens_text(self.id, sentence, graph);
+
+            if !skipped.is_empty() {
+                forms = forms
+                    .into_iter()
+                    .map(|form| match self.include_skipped {
+                        Some(IncludeSkipped::Following) => skipped.clone(),
+                        _ => format!("{}{}", form, skipped),
+                    })
+                    .collect();
+            }
+        }
+
+        forms
     }
 
     fn has_conversion(&self) -> bool {
         !matches!(self.conversion, Conversion::Nop)
+    }
+}
+
+/// Gets the text of the tokens skipped between the graph element `id` and the next element.
+fn skipped_tokens_text(id: GraphId, sentence: &MatchSentence, graph: &MatchGraph) -> String {
+    let index = graph.get_index(id);
+
+    let this_end = graph
+        .by_index(index)
+        .tokens(sentence)
+        .last()
+        .map(|token| token.span().end());
+
+    let next_start = graph
+        .groups()
+        .get(index + 1)
+        .and_then(|group| group.tokens(sentence).next())
+        .map(|token| token.span().start());
+
+    match (this_end, next_start) {
+        (Some(end), Some(start)) if start > end => {
+            sentence.slice(Span::from_positions(end, start)).to_string()
+        }
+        _ => String::new(),
     }
 }
 
@@ -103,31 +366,62 @@ pub struct Synthesizer {
     pub(crate) parts: Vec<SynthesizerPart>,
 }
 
+/// Maximum number of replacements generated from one suggestion element.
+/// Guards against combinatorial explosion when multiple matches synthesize
+/// several word forms each.
+const MAX_REPLACEMENTS: usize = 40;
+
 impl Synthesizer {
+    /// Applies this synthesizer: builds the replacement strings by concatenating its parts.
+    /// Each `match` part may expand to multiple word forms, in which case all
+    /// combinations are generated (mirroring how LanguageTool expands suggestions).
     pub fn apply(
         &self,
         sentence: &MatchSentence,
         graph: &MatchGraph,
         start: GraphId,
         _end: GraphId,
-    ) -> Option<String> {
-        let mut output = Vec::new();
+        synth: Option<&MorphSynthesizer>,
+    ) -> Vec<String> {
+        let mut outputs: Vec<String> = vec![String::new()];
+
+        for part in &self.parts {
+            match part {
+                SynthesizerPart::Text(t) => {
+                    for output in outputs.iter_mut() {
+                        output.push_str(t);
+                    }
+                }
+                SynthesizerPart::Match(m) => {
+                    let forms = m.apply(sentence, graph, synth);
+
+                    if forms.is_empty() {
+                        return Vec::new();
+                    }
+
+                    let mut next: Vec<String> = Vec::with_capacity(outputs.len() * forms.len());
+
+                    'outer: for output in &outputs {
+                        for form in &forms {
+                            let mut combined = output.clone();
+                            combined.push_str(form);
+                            next.push(combined);
+
+                            if next.len() >= MAX_REPLACEMENTS {
+                                break 'outer;
+                            }
+                        }
+                    }
+
+                    outputs = next;
+                }
+            }
+        }
 
         let starts_with_conversion = match &self.parts[..] {
             [SynthesizerPart::Match(m), ..] => m.has_conversion(),
             _ => false,
         };
-
-        for part in &self.parts {
-            match part {
-                SynthesizerPart::Text(t) => output.push(t.clone()),
-                SynthesizerPart::Match(m) => {
-                    output.push(m.apply(sentence, graph)?);
-                }
-            }
-        }
-
-        let suggestion = utils::normalize_whitespace(&output.join(""));
 
         // if the suggestion does not start with a case conversion match, make it title case if:
         // * at sentence start
@@ -148,12 +442,18 @@ impl Synthesizer {
                 })
                 .unwrap_or(false);
 
+        let outputs: Vec<String> = outputs
+            .into_iter()
+            .map(|x| utils::normalize_whitespace(&x))
+            .collect();
+
         if make_uppercase {
-            Some(utils::apply_to_first(&suggestion, |x| {
-                x.to_uppercase().collect()
-            }))
+            outputs
+                .into_iter()
+                .map(|x| utils::apply_to_first(&x, |c| c.to_uppercase().collect()))
+                .collect()
         } else {
-            Some(suggestion)
+            outputs
         }
     }
 }

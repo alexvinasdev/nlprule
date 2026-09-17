@@ -52,6 +52,7 @@ impl RegexCache {
 pub(crate) struct BuildInfo {
     tagger: Arc<Tagger>,
     regex_cache: RegexCache,
+    synthesizer: Option<Arc<crate::rule::synthesizer::Synthesizer>>,
 }
 
 impl BuildInfo {
@@ -59,6 +60,7 @@ impl BuildInfo {
         BuildInfo {
             tagger,
             regex_cache,
+            synthesizer: None,
         }
     }
 
@@ -68,6 +70,14 @@ impl BuildInfo {
 
     pub fn mut_regex_cache(&mut self) -> &mut RegexCache {
         &mut self.regex_cache
+    }
+
+    pub fn set_synthesizer(&mut self, synthesizer: Option<Arc<crate::rule::synthesizer::Synthesizer>>) {
+        self.synthesizer = synthesizer;
+    }
+
+    pub fn synthesizer(&self) -> Option<&Arc<crate::rule::synthesizer::Synthesizer>> {
+        self.synthesizer.as_ref()
     }
 }
 
@@ -375,51 +385,27 @@ fn parse_token(
 }
 
 fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Result<Match, Error> {
-    if m.postag.is_some()
-        || m.postag_regex.is_some()
-        || m.postag_replace.is_some()
-        || m.text.is_some()
-    {
-        // this would need a fully functional PosReplacer to work
-        return Err(Error::Unimplemented(
-            "postag, postag_regex, postag_replace and text in `match` are not implemented.".into(),
-        ));
-    }
+    let id = m
+        .no
+        .parse::<usize>()
+        .expect("no must be parsable as usize.");
 
-    if m.include_skipped.is_some() {
-        return Err(Error::Unimplemented(
-            "include_skipped in `match` is not implemented.".into(),
-        ));
-    }
-
-    let id =
-        m.no.parse::<usize>()
-            .expect("no must be parsable as usize.");
-
-    let case_conversion = if let Some(conversion) = &m.case_conversion {
-        Some(conversion.as_str())
-    } else {
-        None
-    };
-
-    let pos_replacer = if let Some(postag) = m.postag {
+    let postag = if let Some(postag) = m.postag {
         if postag.contains("+DT") || postag.contains("+INDT") {
             return Err(Error::Unimplemented(
                 "+DT and +INDT determiners are not implemented.".into(),
             ));
         }
 
-        let matcher = match m.postag_regex.as_deref() {
-            Some("yes") => {
-                let regex = Regex::from_java_regex(&postag, true, false)?;
-                Matcher::new_regex(regex, false, true)
-            }
-            None => Matcher::new_string(either::Left(postag), false, false, true),
+        match m.postag_regex.as_deref() {
+            Some("yes") => Some(PosTagSelector::Regex {
+                regex: Regex::from_java_regex(&postag, true, true)?,
+                raw: postag.clone(),
+                replace: m.postag_replace,
+            }),
+            None => Some(PosTagSelector::Exact(postag)),
             x => panic!("unknown postag_regex value {:?}", x),
-        };
-        Some(PosReplacer {
-            matcher: PosMatcher::new(matcher, info),
-        })
+        }
     } else {
         None
     };
@@ -432,13 +418,23 @@ fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Re
         _ => None,
     };
 
+    let include_skipped = match m.include_skipped.as_deref() {
+        None => None,
+        Some("all") => Some(IncludeSkipped::All),
+        Some("following") => Some(IncludeSkipped::Following),
+        x => panic!("unknown include_skipped value {:?}", x),
+    };
+
     Ok(Match {
         id: engine.to_graph_id(id)?,
-        conversion: match case_conversion {
+        conversion: match m.case_conversion.as_deref() {
             Some("alllower") => Conversion::AllLower,
             Some("startlower") => Conversion::StartLower,
             Some("startupper") => Conversion::StartUpper,
             Some("allupper") => Conversion::AllUpper,
+            Some("preserve") => Conversion::Preserve,
+            Some("firstupper") => Conversion::FirstUpper,
+            Some("notashkeel") => Conversion::NotAshkeel,
             Some(x) => {
                 return Err(Error::Unimplemented(format!(
                     "case conversion {} not supported.",
@@ -447,8 +443,11 @@ fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Re
             }
             None => Conversion::Nop,
         },
-        pos_replacer,
+        postag,
+        static_lemma: m.content.map(|x| x.to_string()),
+        text: m.text.map(|x| x.to_string()),
         regex_replacer,
+        include_skipped,
     })
 }
 
@@ -480,8 +479,11 @@ fn parse_synthesizer_text(text: &str, engine: &Engine) -> Result<Vec<Synthesizer
             Match {
                 id: engine.to_graph_id(id)?,
                 conversion: Conversion::Nop,
-                pos_replacer: None,
+                postag: None,
+                static_lemma: None,
+                text: None,
                 regex_replacer: None,
+                include_skipped: None,
             }
             .into(),
         ));
@@ -797,20 +799,18 @@ impl Rule {
         }
 
         if suggesters.is_empty() {
-            return Err(Error::Unimplemented(
-                "rules with no suggestion are not implemented.".into(),
-            ));
+            // rules without a suggestion only report an error without replacement —
+            // these are valid, they just never correct anything
+            log::debug!("Rule without suggestion: this rule only reports errors.");
         }
 
         assert!(!message_parts.is_empty(), "Rules must have a message.");
 
         let mut examples = Vec::new();
         for example in &data.examples {
-            if example.kind.is_some() {
-                return Err(Error::Unimplemented(
-                    "examples with `type` (i. e. 'triggers_error') are not implemented.".into(),
-                ));
-            }
+            // examples with `type` (e.g. 'triggers_error') only affect rule testing;
+            // they are valid and can be treated like untyped examples
+            let _ = &example.kind;
 
             let mut texts = Vec::new();
             let mut suggestion: Option<Suggestion> = None;
@@ -867,6 +867,7 @@ impl Rule {
             examples.push(Example {
                 text: texts.join(""),
                 suggestion,
+                kind: example.kind.clone(),
             });
         }
 

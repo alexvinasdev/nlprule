@@ -16,11 +16,13 @@ pub(crate) mod disambiguation;
 pub(crate) mod engine;
 pub(crate) mod grammar;
 pub mod id;
+pub mod synthesizer;
 
 use engine::Engine;
 
 pub(crate) use engine::composition::{MatchGraph, MatchSentence};
 pub use grammar::Example;
+pub use synthesizer::Synthesizer as MorphSynthesizer;
 
 use self::{
     disambiguation::PosFilter,
@@ -192,6 +194,16 @@ impl DisambiguationRule {
     /// Often there are examples associated with a rule.
     /// This method checks whether the correct action is taken in the examples.
     pub fn test(&self, tokenizer: &Tokenizer) -> bool {
+        self.test_with_synth(tokenizer, None)
+    }
+
+    /// Like [Rule::test], but with access to the morphological synthesizer
+    /// used by `match` elements with a `postag`.
+    pub fn test_with_synth(
+        &self,
+        tokenizer: &Tokenizer,
+        synth: Option<&MorphSynthesizer>,
+    ) -> bool {
         let mut passes = Vec::new();
 
         for (i, test) in self.examples.iter().enumerate() {
@@ -286,6 +298,7 @@ impl DisambiguationRule {
 /// An iterator over [Suggestion][crate::types::Suggestion]s.
 pub struct Suggestions<'a, 't> {
     rule: &'a Rule,
+    synth: Option<&'a MorphSynthesizer>,
     matches: EngineMatches<'a, 't>,
     sentence: &'t MatchSentence<'t>,
 }
@@ -296,6 +309,7 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
     fn next(&mut self) -> Option<Self::Item> {
         let rule = self.rule;
         let sentence = self.sentence;
+        let synth = self.synth;
         let (start, end) = (self.rule.start, self.rule.end);
 
         self.matches.find_map(|graph| {
@@ -311,12 +325,13 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
             let replacements: Vec<String> = rule
                 .suggesters
                 .iter()
-                .filter_map(|x| x.apply(sentence, &graph, start, end))
+                .flat_map(|x| x.apply(sentence, &graph, start, end, synth))
                 .collect();
 
             let start = if replacements
                 .iter()
                 .all(|x| utils::no_space_chars().chars().any(|c| x.starts_with(c)))
+                && replacements.iter().any(|x| !x.is_empty())
             {
                 let first_token = graph.groups()[graph.get_index(start)..]
                     .iter()
@@ -353,12 +368,15 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
                 .map(|x| utils::fix_nospace_chars(&x))
                 .collect();
 
-            if !replacements.is_empty() {
+            if !replacements.is_empty() || rule.suggesters.is_empty() {
+                // rules without suggestion elements report an error without replacements
                 Some(Suggestion::new(
                     rule.id.to_string(),
                     rule.message
-                        .apply(sentence, &graph, rule.start, rule.end)
-                        .expect("Rules must have a message."),
+                        .apply(sentence, &graph, rule.start, rule.end, synth)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default(),
                     Span::from_positions(start, end),
                     replacements,
                 ))
@@ -460,7 +478,16 @@ impl Rule {
     }
 
     pub(crate) fn apply<'a, 't>(&'a self, sentence: &'t MatchSentence<'t>) -> Suggestions<'a, 't> {
+        self.apply_with_synth(sentence, None)
+    }
+
+    pub(crate) fn apply_with_synth<'a, 't>(
+        &'a self,
+        sentence: &'t MatchSentence<'t>,
+        synth: Option<&'a MorphSynthesizer>,
+    ) -> Suggestions<'a, 't> {
         Suggestions {
+            synth,
             matches: self.engine.get_matches(sentence, self.start, self.end),
             rule: &self,
             sentence,
@@ -470,6 +497,16 @@ impl Rule {
     /// Grammar rules always have at least one example associated with them.
     /// This method checks whether the correct action is taken in the examples.
     pub fn test(&self, tokenizer: &Tokenizer) -> bool {
+        self.test_with_synth(tokenizer, None)
+    }
+
+    /// Like [Rule::test], but with access to the morphological synthesizer
+    /// used by `match` elements with a `postag`.
+    pub fn test_with_synth(
+        &self,
+        tokenizer: &Tokenizer,
+        synth: Option<&MorphSynthesizer>,
+    ) -> bool {
         let mut passes = Vec::new();
 
         // make sure relative position is handled correctly
@@ -490,14 +527,26 @@ impl Rule {
 
             info!("Sentence: {:#?}", sentence);
             let suggestions: Vec<_> = self
-                .apply(&MatchSentence::new(&sentence))
-                .map(|s| s.lshift(shift_delta))
+                .apply_with_synth(&MatchSentence::new(&sentence), synth)
+                .map(|mut s| {
+                    // rules without a suggestion report an error without replacements;
+                    // the expected replacement is the empty string in that case
+                    if s.replacements().iter().all(|x| x.is_empty()) {
+                        s.set_replacements(vec![String::new()]);
+                    }
+                    s.lshift(shift_delta)
+                })
                 .collect();
 
-            let pass = if suggestions.len() > 1 {
+            let expected: Option<Suggestion> = test.suggestion().cloned();
+
+            let pass = if test.kind.as_deref() == Some("triggers_error") {
+                // the rule must trigger; the replacement is not checked
+                !suggestions.is_empty()
+            } else if suggestions.len() > 1 {
                 false
             } else {
-                match test.suggestion() {
+                match &expected {
                     Some(correct_suggestion) => {
                         suggestions.len() == 1 && correct_suggestion == &suggestions[0]
                     }
