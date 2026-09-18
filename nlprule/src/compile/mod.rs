@@ -23,6 +23,8 @@ use self::parse_structure::{BuildInfo, RegexCache};
 use thiserror::Error;
 
 mod impls;
+
+/// Debug helper exposing failing rule XML.
 mod parse_structure;
 mod structure;
 mod utils;

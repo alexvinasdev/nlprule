@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::io::BufReader;
 use xml::reader::EventReader;
 
-mod preprocess {
+pub mod preprocess {
     use std::{borrow::Cow, str::FromStr};
 
     use lazy_static::lazy_static;
@@ -466,6 +466,8 @@ pub enum PatternPart {
     Or(TokenVector),
     And(TokenVector),
     Feature(Feature),
+    /// Documentation examples inside `pattern` / `antipattern` (LT 6.x); ignored.
+    Example(Example),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -492,6 +494,8 @@ pub struct Rule {
     pub regex: Option<Regex>,
     #[serde(rename = "antipattern")]
     pub antipatterns: Option<Vec<Pattern>>,
+    /// The `<filter>` element can appear between the pattern and the message.
+    pub filter: Option<Filter>,
     pub message: Message,
     #[serde(rename = "suggestion")]
     pub suggestions: Option<Vec<Suggestion>>,
@@ -502,7 +506,6 @@ pub struct Rule {
     pub short: Option<XmlText>,
     pub url: Option<XmlText>,
     pub default: Option<String>,
-    pub filter: Option<Filter>,
     /// Rule metadata tag (LT 6.x); accepted but unused.
     pub tags: Option<String>,
     /// Rule type attribute (LT 6.x, e.g. 'personal'); accepted but unused.

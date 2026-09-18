@@ -684,6 +684,7 @@ fn parse_pattern(
                 });
             }
             structure::PatternPart::Feature(_) => {}
+            structure::PatternPart::Example(_) => {}
         }
     }
 
@@ -1234,6 +1235,8 @@ impl DisambiguationRule {
                             }))
                         }
                         structure::PatternPart::Feature(_) => {}
+                        structure::PatternPart::Example(_) => {}
+            structure::PatternPart::Example(_) => {}
                     }
                 }
 
@@ -1305,6 +1308,8 @@ impl DisambiguationRule {
                             mask.push(tokens.tokens[0].unify.is_some());
                         }
                         structure::PatternPart::Feature(_) => {}
+                        structure::PatternPart::Example(_) => {}
+            structure::PatternPart::Example(_) => {}
                     }
                 }
 

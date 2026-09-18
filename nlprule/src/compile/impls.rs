@@ -250,6 +250,45 @@ impl MultiwordTagger {
     }
 }
 
+/// If the regex is a pure alternation of literals (e.g. the generated
+/// simple-replace rules), returns the matching word ids directly.
+fn literal_alternation_set(
+    regex: &crate::utils::regex::Regex,
+    info: &BuildInfo,
+) -> Option<DefaultHashSet<WordIdInt>> {
+    let pattern = regex.as_str();
+
+    // strip the full-match wrapper added by from_java_regex
+    let inner = pattern
+        .strip_prefix("^(?:")
+        .and_then(|x| x.strip_suffix(")$"))?;
+
+    if inner.is_empty() {
+        return None;
+    }
+
+    // an empty alternative would match the empty string; bail out to the generic path
+    for alt in inner.split('|') {
+        if alt.is_empty() {
+            return None;
+        }
+        // reject anything containing regex metacharacters
+        if alt.chars().any(|c| "\\\\.^$?*+()[]{}".contains(c)) {
+            return None;
+        }
+    }
+
+    let mut set = DefaultHashSet::default();
+    for alt in inner.split('|') {
+        // O(1) word store lookup
+        if let Some(id) = info.tagger().id_word(alt.into()).1 {
+            set.insert(id);
+        }
+    }
+
+    Some(set)
+}
+
 impl TextMatcher {
     pub(in crate::compile) fn new(matcher: Matcher, info: &mut BuildInfo) -> Self {
         // can not cache a matcher that depends on the graph
@@ -264,6 +303,12 @@ impl TextMatcher {
 
             if let Some(set) = info.mut_regex_cache().get(&matcher_hash) {
                 set.clone()
+            } else if let Some(set) = literal_alternation_set(&regex, info) {
+                // fast path: a pure alternation of literals resolves through the
+                // word store directly instead of matching every word against the regex
+                let set = if set.len() > 100 { None } else { Some(set) };
+                info.mut_regex_cache().insert(matcher_hash, set.clone());
+                set
             } else {
                 let data: Vec<_> = info.tagger().word_store().iter().collect();
 
