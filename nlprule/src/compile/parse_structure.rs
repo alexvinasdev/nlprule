@@ -120,6 +120,8 @@ fn parse_match_attribs(
 
     let negate = match attribs.negate().as_deref() {
         Some("yes") => true,
+        // an explicit "no" behaves like not negated
+        Some("no") => false,
         None => false,
         x => panic!("unknown negate value {:?}", x),
     };
@@ -455,7 +457,7 @@ fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Re
                     .map(Some)
                     .unwrap_or(None),
             }),
-            None => Some(PosTagSelector::Exact(postag)),
+            None | Some("no") => Some(PosTagSelector::Exact(postag)),
             x => panic!("unknown postag_regex value {:?}", x),
         }
     } else {

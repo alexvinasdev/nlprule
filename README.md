@@ -152,26 +152,43 @@ All languages are built from a LanguageTool 6.5 desktop distribution with
 Japanese/Chinese need LT's specialized tokenizers; `da`/`km`/`crh` suffer from incomplete
 tagger dictionaries in the LT distribution itself.
 
-| lang | XML rules | runnable | passing | lang | XML rules | runnable | passing |
-|------|-----------|----------|---------|------|-----------|----------|---------|
-| ar   | 494       | 298      | 159     | km   | 34        | 33       | 0       |
-| ast  | 88        | 71       | 69      | lt   | 9         | 4        | 4       |
-| be   | 98        | 66       | 56      | ml   | 23        | 18       | 18      |
-| br   | 810       | 661      | 475     | nl   | 2996      | 1368     | 1331    |
-| ca   | 9154      | 5809     | 2945    | pl   | 2042      | 1551     | 1233    |
-| crh  | 118       | 93       | 17      | pt   | 2221      | 831      | 613     |
-| da   | 100       | 78       | 61      | ro   | 543       | 446      | 395     |
-| de   | 5940      | 3903     | 3747    | ru   | 1211      | 858      | 687     |
-| de-DE-x-simple | 110 | 92     | 40      | sk   | 169       | 206      | 184     |
-| el   | 57        | 55       | 52      | sl   | 145       | 85       | 82      |
-| en   | 6506      | 4060     | 3050    | sr   | (Java-only rules in LT) | 0 | 0 |
-| eo   | 486       | 415      | 126     | sv   | 33        | 31       | 29      |
-| es   | 1910      | 916      | 659     | ta   | 263       | 210      | 210     |
-| fa   | 290       | 283      | 76      | tl   | 44        | 44       | 37      |
-| fr   | 5842      | 2593     | 1764    | uk   | 1211      | 1161     | 931     |
-| ga   | 1755      | 1661     | 1387    | zh   | 2208      | 1863     | 1       |
-| gl   | 414       | 220      | 146     | it   | 192       | 129      | 124     |
-| ja   | 735       | 735      | 5       |      |           |          |         |
+| lang | runnable | passing | lang | runnable | passing |
+|------|----------|---------|------|----------|---------|
+| ar   | 961      | 822     | km   | 44       | 11      |
+| ast  | 71       | 69      | lt   | 4        | 4       |
+| be   | 516      | 506     | ml   | 18       | 18      |
+| br   | 661      | 475     | nl   | 1516     | 1471    |
+| ca   | 13846    | 10227   | pl   | 1778     | 1460    |
+| crh  | 93       | 17      | pt   | 1832     | 895     |
+| da   | 78       | 61      | ro   | 1167     | 1116    |
+| de   | 5400     | 5162    | ru   | 1147     | 975     |
+| de-DE-x-simple | 92 | 40   | sk   | 206      | 184     |
+| el   | 98       | 95      | sl   | 85       | 82      |
+| en   | 5572     | 4066    | sr   | 45       | 44      |
+| eo   | 415      | 126     | sv   | 31       | 29      |
+| es   | 1159     | 896     | ta   | 210      | 210     |
+| fa   | 764      | 557     | tl   | 44       | 37      |
+| fr   | 4533     | 3018    | uk   | 10902    | 10672   |
+| ga   | 3566     | 3292    | zh   | 1863     | 1207    |
+| gl   | 220      | 146     | it   | 129      | 124     |
+| ja   | 735      | 702     |      |          |         |
+
+Totals: ~51,000 runnable rules, ~42,200 passing their embedded LanguageTool
+examples (~83%). Highlights: uk 97.8%, be 98.1%, nl 97.1%, sr 97.8%, de 95.6%,
+ja 95.5% (lindera/ipadic), ro 95.6%, ta 100%, ga 92.3%, ru 85%, ar 85.5%.
+
+Language-specific notes:
+- `ja` uses lindera with the ipadic dictionary (the same dictionary data LT uses
+  via Sen/Gosen); enable the `ja` cargo feature
+- `zh` uses jieba segmentation (`zh` feature); LT uses HanLP whose core
+  dictionary is not freely extractable, so vocabulary-dependent rules differ
+- SimpleReplaceRule data tables (`replace*.txt`) are converted to XML rules
+  automatically; tables larger than 10k lines are skipped (nl's 66k-line table
+  does not fit the per-rule model)
+- `sr` rules come from LT master (ekavian variant) plus its replace tables
+- `da`/`km`/`crh`/`eo`/`fa` have incomplete tagger data in LT itself
+- Filters implemented at runtime: UnderlineSpaces, ApostropheType,
+  RegexAntiPattern, AdaptSuggestions, *SuppressMisspelledSuggestions
 
 With the original LT 5.2-based build directories, English passes 4192/4226 (99.2%) of its
 example tests and German 3799/3903 (97.3%).

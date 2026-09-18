@@ -267,26 +267,69 @@ fn literal_alternation_set(
         return None;
     }
 
-    // an empty alternative would match the empty string; bail out to the generic path
-    for alt in inner.split('|') {
-        if alt.is_empty() {
-            return None;
-        }
-        // reject anything containing regex metacharacters
-        if alt.chars().any(|c| "\\\\.^$?*+()[]{}".contains(c)) {
-            return None;
-        }
-    }
+    // case-insensitive regexes were rewritten by `from_java_regex` into
+    // single-char classes (e.g. `[wW][oO][rR][dD]`); undo that representation
+    let lowercased: Option<Vec<String>> = inner
+        .split('|')
+        .map(|alt| {
+            let mut word = String::new();
+            let mut chars = alt.chars().peekable();
+
+            while let Some(c) = chars.next() {
+                match c {
+                    '[' => {
+                        // expect exactly two cased chars: lowercase + uppercase
+                        let a = chars.next()?;
+                        let b = chars.next()?;
+                        if chars.next() != Some(']') || a.to_lowercase().next() != b.to_lowercase().next() {
+                            return None;
+                        }
+                        word.push(a.to_lowercase().next()?);
+                    }
+                    ']' | '\\' | '.' | '^' | '$' | '?' | '*' | '+' | '(' | ')' | '{' | '}' => {
+                        return None;
+                    }
+                    _ => word.push(c),
+                }
+            }
+
+            if word.is_empty() {
+                None
+            } else {
+                Some(word)
+            }
+        })
+        .collect();
+
+    let words = lowercased?;
 
     let mut set = DefaultHashSet::default();
-    for alt in inner.split('|') {
-        // O(1) word store lookup
-        if let Some(id) = info.tagger().id_word(alt.into()).1 {
-            set.insert(id);
+    for word in words {
+        // a case-insensitive literal matches the word in the casings that can
+        // occur in the word store: as-is, lowercase, capitalized and uppercase
+        for variant in [
+            word.clone(),
+            word.to_lowercase(),
+            capitalize(&word),
+            word.to_uppercase(),
+        ] {
+            // O(1) word store lookup
+            if let Some(id) = info.tagger().id_word(variant.into()).1 {
+                set.insert(id);
+            }
         }
     }
 
     Some(set)
+}
+
+/// Upper-cases the first char of the string.
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 impl TextMatcher {

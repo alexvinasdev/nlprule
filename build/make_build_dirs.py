@@ -25,6 +25,8 @@ import logging
 import lxml.etree as ET
 import wordfreq
 
+MAX_TABLE_LINES = 10000
+
 LT_MASTER = "https://raw.githubusercontent.com/languagetool-org/languagetool/master"
 
 # analyzer + synth dict locations: ('loose', filename_stem) or ('jar', jar, entry)
@@ -221,6 +223,15 @@ def simple_replace_rules(tables):
         try:
             content = Path(path).read_text(encoding="utf-8", errors="replace")
         except OSError:
+            continue
+        # per-rule conversion does not scale to very large tables; the largest
+        # (nl: 66k lines) would take hours to compile and bloat the binary.
+        # LT handles these as a single dictionary-lookup rule instead.
+        if content.count("\n") > MAX_TABLE_LINES:
+            logging.warning(
+                "%s: table %s has more than %d lines, skipping",
+                stem, MAX_TABLE_LINES,
+            )
             continue
         for line in content.splitlines():
             line = line.split("#")[0].strip()
