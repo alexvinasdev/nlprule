@@ -40,13 +40,20 @@ def main():
 
         known = dump_tags(dump)
 
-        if not known:
+        existing = set()
+        if (out / "tagger.json").exists():
+            existing = set(
+                json.loads((out / "tagger.json").read_text()).get("extra_tags", [])
+            )
+
+        if not known and not existing:
             # no analyzer dictionary: LT has no POS tagger for this language,
             # POS tags are never assigned, so none are needed in the store
             extra = []
         else:
+            # keep manually declared tags (e.g. CJK segmenter tag sets)
             extra = sorted(
-                (literal_postags(disambig) | literal_postags(grammar)) - known
+                ((literal_postags(disambig) | literal_postags(grammar)) - known) | existing
             )
 
         (out / "tagger.json").write_text(
@@ -64,17 +71,20 @@ def main():
         (out / "rules.json").write_text(
             json.dumps({"allow_errors": True, "ignore_ids": []}, indent=4) + "\n"
         )
-        (out / "tokenizer.json").write_text(
-            json.dumps(
-                {
-                    "allow_errors": True,
-                    "ignore_ids": [],
-                    "extra_join_regexes": [URL_JOIN_REGEX],
-                },
-                indent=4,
-            )
-            + "\n"
-        )
+        existing_tok = {}
+        if (out / "tokenizer.json").exists():
+            existing_tok = json.loads((out / "tokenizer.json").read_text())
+
+        tokenizer_cfg = {
+            "allow_errors": True,
+            "ignore_ids": [],
+            "extra_join_regexes": [URL_JOIN_REGEX],
+        }
+        # preserve settings not derived here (e.g. cjk_segmentation)
+        for key in ("cjk_segmentation", "extra_split_chars"):
+            if key in existing_tok:
+                tokenizer_cfg[key] = existing_tok[key]
+        (out / "tokenizer.json").write_text(json.dumps(tokenizer_cfg, indent=4) + "\n")
         print(f"{lang}: extra_tags={len(extra)}")
 
 

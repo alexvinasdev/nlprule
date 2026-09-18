@@ -13,6 +13,7 @@ use crate::rule::engine::composition::concrete::*;
 use crate::rule::engine::composition::*;
 use crate::rule::engine::*;
 use crate::rule::grammar::*;
+use crate::rule::post_filter::PostFilter;
 use crate::rule::{id::Index, DisambiguationRule, Rule, Unification};
 
 // this is set arbitrarily at the moment, could be an option
@@ -743,11 +744,11 @@ impl Rule {
         data: structure::Rule,
         info: &mut BuildInfo,
     ) -> Result<Rule, Error> {
-        if data.filter.is_some() {
-            return Err(Error::Unimplemented(
-                "rules with filter are not implemented.".into(),
-            ));
-        }
+        let post_filter = data
+            .filter
+            .as_ref()
+            .map(|filter| parse_post_filter(filter))
+            .transpose()?;
 
         let (engine, start, end) = match (&data.pattern, data.regex) {
             (Some(_), Some(_)) => Err(Error::Unexpected(
@@ -948,6 +949,7 @@ impl Rule {
             },
             url: data.url.map(|x| x.to_string()),
             short: data.short.map(|x| x.to_string()),
+            post_filter,
             // fields below need information from rule group / category, so are set later
             id: Index::default(),
             name: String::new(),
@@ -955,6 +957,68 @@ impl Rule {
             category_type: None,
             enabled: true,
         })
+    }
+}
+
+/// Maps an LT `<filter>` (class + args) to a runtime [PostFilter].
+/// Unsupported classes return an error so the rule is skipped, as before.
+fn parse_post_filter(filter: &structure::Filter) -> Result<PostFilter, Error> {
+    use crate::rule::post_filter::{PostFilter, UnderlineMode};
+
+    let name = filter
+        .class
+        .split('.')
+        .next_back()
+        .unwrap_or_else(|| filter.class.as_str());
+
+    let args: DefaultHashMap<String, String> = filter
+        .args
+        .split(' ')
+        .filter_map(|x| {
+            x.find(':').map(|idx| {
+                (
+                    x[..idx].to_string(),
+                    x[(idx + ':'.len_utf8())..].to_string(),
+                )
+            })
+        })
+        .collect();
+
+    match name {
+        "UnderlineSpacesFilter" => Ok(PostFilter::UnderlineSpaces {
+            mode: match args.get("underlineSpaces").map(|x| x.as_str()) {
+                Some("before") => UnderlineMode::Before,
+                Some("after") => UnderlineMode::After,
+                Some("both") => UnderlineMode::Both,
+                x => panic!("unknown underlineSpaces value {:?}", x),
+            },
+        }),
+        "ApostropheTypeFilter" => Ok(PostFilter::ApostropheType {
+            has_typographic: args
+                .get("hasTypographicalApostrophe")
+                .map(|x| x == "true")
+                .unwrap_or(false),
+        }),
+        "RegexAntiPatternFilter" => Ok(PostFilter::RegexAntiPattern {
+            regexes: args
+                .get("antipatterns")
+                .ok_or_else(|| {
+                    Error::Unexpected("RegexAntiPatternFilter must have `antipatterns`".into())
+                })?
+                .split('|')
+                .map(|x| Regex::from_java_regex(x, false, false))
+                .collect::<Result<Vec<_>, Error>>()?,
+        }),
+        "AdaptSuggestionsFilter" => Ok(PostFilter::AdaptSuggestions),
+        x if x.ends_with("SuppressMisspelledSuggestionsFilter") => {
+            Ok(PostFilter::SuppressMisspelled {
+                suppress_match: args
+                    .get("suppressMatch")
+                    .map(|x| x != "false")
+                    .unwrap_or(true),
+            })
+        }
+        x => Err(Error::Unimplemented(format!("filter {} is not implemented.", x))),
     }
 }
 

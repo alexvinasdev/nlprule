@@ -192,6 +192,65 @@ def dump_tags(dump_path):
     return tags
 
 
+
+def escape_xml(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def escape_regex(text: str) -> str:
+    out = []
+    for c in text:
+        if c in "\\.^$|?*+()[]{}":
+            out.append("\\")
+        out.append(c)
+    return "".join(out)
+
+
+def simple_replace_rules(tables):
+    """Converts LT SimpleReplaceRule data tables (`wrong=correct1|correct2` or
+    `wrong1|wrong2=correct`) into grammar rule XML, one rulegroup per table."""
+    parts = []
+    for stem, path in tables:
+        name = "REPLACE_" + re.sub(r"[^A-Za-z0-9]", "_", stem).upper()
+        rules = []
+        try:
+            content = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in content.splitlines():
+            line = line.split("#")[0].strip()
+            if not line or "=" not in line:
+                continue
+            wrong, correct = line.split("=", 1)
+            wrongs = [w.strip() for w in wrong.split("|") if w.strip()]
+            corrects = [c.strip() for c in correct.split("|") if c.strip()]
+            if not wrongs or not corrects:
+                continue
+            token = "|".join(escape_regex(w) for w in wrongs)
+            suggestions = "|".join(escape_xml(c) for c in corrects)
+            display = escape_xml(corrects[0])
+            token_xml = escape_xml(token)
+            rules.append(
+                "<rule>\n"
+                f"<pattern><token regexp=\"yes\">{token_xml}</token></pattern>\n"
+                f"<message>Did you mean <suggestion>{suggestions}</suggestion>?</message>\n"
+                "</rule>"
+            )
+        if rules:
+            parts.append(
+                f'<category id="{name}" name="Simple replacements ({escape_xml(stem)})">\n'
+                f'<rulegroup id="{name}" name="Simple replacements ({escape_xml(stem)})">\n'
+                + "\n".join(rules)
+                + "\n</rulegroup>\n</category>"
+            )
+    return "\n".join(parts)
+
+
 def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
     dist_rules = lt_dir / "org" / "languagetool" / "rules" / lang
     resource_dir = lt_dir / "org" / "languagetool" / "resource" / lang
@@ -206,6 +265,7 @@ def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
 
     # grammar.xml
     grammar = out_dir / "grammar.xml"
+    merged_grammar = False
     if dist_rules.exists() and (dist_rules / "grammar.xml").exists():
         # some languages (uk, sk) split rules over several grammar-*.xml files
         # which LT loads by convention; merge them into one file
@@ -248,12 +308,61 @@ def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
             copyfile(dist_rules / "grammar.xml", grammar)
             merged_grammar = False
     elif lang in GITHUB_ONLY:
-        if not fetch_github(
+        base = (
             f"languagetool-language-modules/{lang}/src/main/resources/"
-            f"org/languagetool/rules/{lang}/grammar.xml",
-            grammar,
-        ):
+            f"org/languagetool/rules/{lang}"
+        )
+        shell_ok = fetch_github(f"{base}/grammar.xml", grammar)
+
+        # languages like sr split rules over grammar-*.xml files like uk
+        sub_files = []
+        for candidate in [
+            "grammar-barbarism.xml",
+            "grammar-grammar.xml",
+            "grammar-logical.xml",
+            "grammar-punctuation.xml",
+            "grammar-spelling.xml",
+            "grammar-style.xml",
+            "grammar-typography.xml",
+            "grammar-nezaradene.xml",
+        ]:
+            target = out_dir / candidate
+            if fetch_github(f"{base}/{candidate}", target):
+                sub_files.append(target)
+
+        if shell_ok and sub_files:
+            merged = [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                '<rules lang="%s">' % lang,
+            ]
+            dtd_parser = ET.XMLParser(
+                load_dtd=True, resolve_entities=True, no_network=True, huge_tree=True
+            )
+
+            def children_of(path):
+                try:
+                    root = ET.parse(str(path), dtd_parser).getroot()
+                except ET.XMLSyntaxError:
+                    content = path.read_bytes()
+                    try:
+                        root = ET.fromstring(content)
+                    except ET.XMLSyntaxError:
+                        root = ET.fromstring(b"<rules>" + content + b"</rules>")
+                for child in root:
+                    if isinstance(child.tag, str):
+                        yield ET.tostring(child, encoding="unicode")
+
+            merged.extend(children_of(grammar))
+            for sub in sub_files:
+                merged.extend(children_of(sub))
+            merged.append("</rules>")
+            grammar.write_text("\n".join(merged), encoding="utf-8")
+            merged_grammar = True
+        elif shell_ok:
+            merged_grammar = False
+        else:
             logging.warning("%s: no grammar.xml", lang)
+            merged_grammar = False
     else:
         logging.warning("%s: no grammar.xml", lang)
 
@@ -329,13 +438,52 @@ def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
                             except KeyError:
                                 pass
                 if ".dict" in synth_pair and ".info" in synth_pair and not synth_dump.exists():
-                    dump_dictionary(java, classpath, synth_pair[".dict"], synth_pair[".info"], synth_dump)
+                    ok = dump_dictionary(java, classpath, synth_pair[".dict"], synth_pair[".info"], synth_dump)
+                    if ok:
+                        # sort by key (column 1) so the FST can be built streaming;
+                        # large dumps must not be loaded into memory at once
+                        sh(
+                            [
+                                "sort",
+                                "-t",
+                                "\t",
+                                "-k1,1",
+                                "-o",
+                                str(synth_dump),
+                                str(synth_dump),
+                            ],
+                            env={**os.environ, "LC_ALL": "C"},
+                        )
             else:
                 output_dump.write_text("")
 
     if grammar.exists() and not merged_grammar:
         dist_grammar = dist_rules / "grammar.xml"
         canonicalize(dist_grammar if dist_grammar.exists() else grammar, grammar)
+
+    # convert LT SimpleReplaceRule data tables into XML rules
+    if grammar.exists():
+        tables = []
+        if dist_rules.exists():
+            for table in sorted(dist_rules.glob("replace*.txt")):
+                tables.append((table.stem, table))
+        if lang == "sr":
+            for stem in ["replace-grammar", "replace-soft", "replace-style"]:
+                target = out_dir / f"sr_{stem}.txt"
+                fetch_github(
+                    f"languagetool-language-modules/sr/src/main/resources/"
+                    f"org/languagetool/rules/sr/ekavian/{stem}.txt",
+                    target,
+                )
+                if target.exists():
+                    tables.append((stem, target))
+
+        extra = simple_replace_rules(tables)
+        if extra:
+            content = grammar.read_text(encoding="utf-8", errors="replace")
+            content = content.replace("</rules>", extra + "\n</rules>")
+            grammar.write_text(content, encoding="utf-8")
+            logging.info("%s: appended simple-replace rules from %d tables", lang, len(tables))
 
     dist_disambig = resource_dir / "disambiguation.xml"
     canonicalize(

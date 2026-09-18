@@ -168,7 +168,7 @@ pub fn compile(
         "de" => crate::rule::synthesizer::SynthesizerKind::German,
         _ => crate::rule::synthesizer::SynthesizerKind::Default,
     };
-    let synthesizer = crate::rule::synthesizer::Synthesizer::from_dumps(
+    let synthesizer = crate::rule::synthesizer::from_dumps(
         &paths.synth_dump_path,
         &[
             paths.tag_paths[1].clone(),

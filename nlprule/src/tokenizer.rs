@@ -21,6 +21,7 @@ use std::{
 };
 
 pub mod chunk;
+pub mod cjk;
 pub mod multiword;
 pub mod tag;
 
@@ -72,6 +73,9 @@ pub(crate) struct TokenizerLangOptions {
     /// Extra language-specific Regexes of which the matches will *not* be split into multiple tokens.
     #[serde(default)]
     pub extra_join_regexes: Vec<Regex>,
+    /// CJK dictionary-based word segmentation to use ("jieba" for Chinese).
+    #[serde(default)]
+    pub cjk_segmentation: Option<String>,
 }
 
 impl Default for TokenizerLangOptions {
@@ -83,6 +87,7 @@ impl Default for TokenizerLangOptions {
             known_failures: Vec::new(),
             extra_split_chars: Vec::new(),
             extra_join_regexes: Vec::new(),
+            cjk_segmentation: None,
         }
     }
 }
@@ -157,6 +162,8 @@ pub struct Tokenizer {
     pub(crate) multiword_tagger: Option<MultiwordTagger>,
     pub(crate) tagger: Arc<Tagger>,
     pub(crate) lang_options: TokenizerLangOptions,
+    /// CJK segmenter used to split whitespace-less text into words.
+    pub(crate) cjk: Option<cjk::CjkSegmenter>,
 }
 
 impl Tokenizer {
@@ -197,6 +204,11 @@ impl Tokenizer {
 
     pub(crate) fn lang_options(&self) -> &TokenizerLangOptions {
         &self.lang_options
+    }
+
+    /// The CJK segmenter configured for this language, if any.
+    pub fn cjk_segmenter(&self) -> Option<cjk::CjkSegmenter> {
+        self.cjk
     }
 
     pub(crate) fn disambiguate_up_to_id<'t>(
@@ -263,6 +275,28 @@ impl Tokenizer {
                     }));
                 }
             }
+
+            // CJK text has no whitespace word boundaries: segment it with a
+            // dictionary-based segmenter (mirrors LT's HanLP / Sen tokenizers)
+            if let Some(segmenter) = self.cjk {
+                let mut segmented = Vec::new();
+                for token in tokens {
+                    if cjk::needs_segmentation(token) {
+                        let offset = token.as_ptr() as usize - text.as_ptr() as usize;
+                        segmented.extend(
+                            cjk::segment(token, segmenter)
+                                .into_iter()
+                                .map(|(start, end)| {
+                                    &text[offset + start..offset + end]
+                                }),
+                        );
+                    } else {
+                        segmented.push(token);
+                    }
+                }
+                tokens = segmented;
+            }
+
             tokens
         };
 
@@ -321,17 +355,21 @@ impl Tokenizer {
                 let is_sentence_start = i == 0;
                 let is_sentence_end = i == n_token_strs - 1;
 
+                let mut tags: Vec<_> = self
+                    .tagger
+                    .get_tags_with_options(
+                        token_text,
+                        if is_sentence_start { Some(true) } else { None },
+                        None,
+                    )
+                    .collect();
+
+                if self.cjk.is_some() && cjk::needs_segmentation(token_text) {
+                    tags.extend(cjk::word_data(token_text, self.cjk.unwrap(), &self.tagger));
+                }
+
                 IncompleteToken::new(
-                    Word::new(
-                        self.tagger.id_word(token_text.into()),
-                        self.tagger
-                            .get_tags_with_options(
-                                token_text,
-                                if is_sentence_start { Some(true) } else { None },
-                                None,
-                            )
-                            .collect(),
-                    ),
+                    Word::new(self.tagger.id_word(token_text.into()), tags),
                     Span::new(
                         byte_start..byte_start + token_text.len(),
                         char_start..char_start + token_text.chars().count(),

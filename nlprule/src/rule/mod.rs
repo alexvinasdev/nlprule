@@ -16,6 +16,7 @@ pub(crate) mod disambiguation;
 pub(crate) mod engine;
 pub(crate) mod grammar;
 pub mod id;
+pub(crate) mod post_filter;
 pub mod synthesizer;
 
 use engine::Engine;
@@ -328,7 +329,7 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
                 .flat_map(|x| x.apply(sentence, &graph, start, end, synth))
                 .collect();
 
-            let start = if replacements
+            let mut start = if replacements
                 .iter()
                 .all(|x| utils::no_space_chars().chars().any(|c| x.starts_with(c)))
                 && replacements.iter().any(|x| !x.is_empty())
@@ -351,13 +352,33 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
             } else {
                 start_group.span.start()
             };
-            let end = end_group.span.end();
+            let mut end = end_group.span.end();
 
             // this should never happen, but just return None instead of raising an Error
             // `end` COULD be equal to `start` if the suggestion is to insert text at this position
             if end < start {
                 return None;
             }
+
+            // apply the rule's post-filter (LT `<filter>`) if any
+            let replacements = if let Some(filter) = &rule.post_filter {
+                let matched_text = sentence.slice(Span::from_positions(start, end)).to_string();
+                match filter.apply(
+                    sentence,
+                    Span::from_positions(start, end),
+                    replacements,
+                    &matched_text,
+                ) {
+                    Some(filtered) => {
+                        start = filtered.span.start();
+                        end = filtered.span.end();
+                        filtered.replacements
+                    }
+                    None => return None,
+                }
+            } else {
+                replacements
+            };
 
             let text_before = sentence.slice(Span::from_positions(start, end));
 
@@ -417,6 +438,8 @@ pub struct Rule {
     pub(crate) category_name: String,
     pub(crate) category_type: Option<String>,
     pub(crate) unification: Option<Unification>,
+    /// Runtime post-filter applied to fired matches (LT `<filter>` element).
+    pub(crate) post_filter: Option<post_filter::PostFilter>,
     pub(crate) enabled: bool,
 }
 

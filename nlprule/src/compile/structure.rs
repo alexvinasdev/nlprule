@@ -27,6 +27,8 @@ mod preprocess {
             .filter(|x| {
                 // processing instructions break the writer and are useless to us
                 !matches!(x, xml::reader::XmlEvent::ProcessingInstruction { .. })
+                    // commented-out rules must not be parsed
+                    && !matches!(x, xml::reader::XmlEvent::Comment { .. })
             })
             .collect::<Vec<_>>();
 
@@ -493,7 +495,7 @@ pub struct Rule {
     pub message: Message,
     #[serde(rename = "suggestion")]
     pub suggestions: Option<Vec<Suggestion>>,
-    #[serde(rename = "example")]
+    #[serde(rename = "example", default)]
     pub examples: Vec<Example>,
     pub id: Option<String>,
     pub name: Option<String>,

@@ -480,12 +480,20 @@ impl Tokenizer {
             }
         }
 
+        let cjk = match lang_options.cjk_segmentation.as_deref() {
+            Some("jieba") => Some(crate::tokenizer::cjk::CjkSegmenter::Jieba),
+            Some("lindera") => Some(crate::tokenizer::cjk::CjkSegmenter::Lindera),
+            None => None,
+            x => panic!("unknown cjk_segmentation value {:?}", x),
+        };
+
         Ok(Tokenizer {
             tagger: build_info.tagger().clone(),
             sentencizer,
             chunker,
             multiword_tagger,
             rules,
+            cjk,
             lang_options,
         })
     }
