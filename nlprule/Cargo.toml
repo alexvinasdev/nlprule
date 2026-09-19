@@ -108,3 +108,15 @@ required-features = ["bin"]
 [[bin]]
 name = "test_disambiguation"
 required-features = ["bin"]
+
+[[bin]]
+name = "bench"
+required-features = ["bin"]
+
+[[bin]]
+name = "debug_filters"
+required-features = ["bin"]
+
+[[bin]]
+name = "check_server"
+required-features = ["bin"]

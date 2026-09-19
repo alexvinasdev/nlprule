@@ -239,6 +239,25 @@ Language-specific notes:
   en AdverbFilter, ar verb filters, and `en`'s chunker (4.8k chunk references
   in `grammar.xml` need a port of LT's regex chunker)
 
+### Performance vs the LanguageTool server
+
+`build/bench_server.py` (150 example sentences per language, same machine,
+single thread; LT via its local HTTP server, nlprule in-process):
+
+| lang | nlprule p50/sentence | nlprule p95 | nlprule throughput | LT server p50 | LT server p95 | LT throughput | nlprule RSS | LT JVM RSS |
+|------|----------------------|-------------|--------------------|---------------|---------------|---------------|-------------|------------|
+| en   | 1 ms                 | 3 ms        | 611 sents/s        | 11 ms         | 15 ms         | 63 sents/s    | 231 MB      | ~2.5 GB    |
+| de   | 1 ms                 | 3 ms        | 758 sents/s        | 17 ms         | 32 ms         | 53 sents/s    | 353 MB      | ~2.5 GB    |
+| fr   | 1 ms                 | 3 ms        | 625 sents/s        | 1949 ms       | 2272 ms       | 0.5 sents/s   | 293 MB      | ~2.5 GB    |
+| es   | 1 ms                 | 2 ms        | 178 sents/s*       | 12 ms         | 42 ms         | 64 sents/s    | 1.2 GB      | ~2.5 GB    |
+| ca   | 2 ms                 | 5 ms        | 375 sents/s        | 29 ms         | 35 ms         | 34 sents/s    | 414 MB      | ~2.5 GB    |
+
+nlprule loads its binaries in 0.6-3.1 s per language and is 10-4000x faster per
+sentence. (*`es` mean is 5.6 ms: sentences that hit the FindSuggestions
+full-scan fallback over the 3.4M-form speller dominate; p50 is 1 ms.)
+nlprule fires more matches than the server because it applies rules that LT
+disables by default (`default="off"`).
+
 With the original LT 5.2-based build directories, English passes 4192/4226 (99.2%) of its
 example tests and German 3799/3903 (97.3%).
 
