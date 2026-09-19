@@ -37,6 +37,8 @@ impl Default for RulesLangOptions {
 /// A set of grammatical error correction rules.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Rules {
+    /// Shared auxiliary data for the ported Java rule filters.
+    pub(crate) filter_data: crate::rule::filter_data::FilterData,
     pub(crate) rules: Vec<Rule>,
     /// Shared morphological synthesizer used by rules to inflect lemmas in suggestions.
     pub(crate) synth: Option<std::sync::Arc<crate::rule::synthesizer::Synthesizer>>,
@@ -75,6 +77,11 @@ impl Rules {
         self.synth.as_ref()
     }
 
+    /// The shared filter data (speller, multitoken tables, ...) if any.
+    pub fn filter_data(&self) -> &crate::rule::filter_data::FilterData {
+        &self.filter_data
+    }
+
     /// All rules ordered by priority (mutable).
     pub fn rules_mut(&mut self) -> &mut [Rule] {
         &mut self.rules
@@ -108,7 +115,11 @@ impl Rules {
             .map(|(i, rule)| {
                 let mut output = Vec::new();
 
-                for suggestion in rule.apply_with_synth(&sentence, self.synth.as_deref()) {
+                for suggestion in rule.apply_with_synth(
+                    &sentence,
+                    self.synth.as_deref(),
+                    Some(&self.filter_data),
+                ) {
                     output.push((i, suggestion));
                 }
 
@@ -233,6 +244,7 @@ where
         Self {
             rules,
             synth: None,
+            filter_data: Default::default(),
         }
     }
 }

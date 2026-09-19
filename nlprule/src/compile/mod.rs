@@ -42,6 +42,10 @@ struct BuildFilePaths {
     srx_path: PathBuf,
     synth_dump_path: PathBuf,
     do_not_synthesize_path: PathBuf,
+    speller_wordlist_path: PathBuf,
+    multitoken_list_path: PathBuf,
+    confusion_pairs_path: PathBuf,
+    added_compound_path: PathBuf,
 }
 
 impl BuildFilePaths {
@@ -60,6 +64,10 @@ impl BuildFilePaths {
             srx_path: p.join("segment.srx"),
             synth_dump_path: p.join("tags/synth.dump"),
             do_not_synthesize_path: p.join("tags/do-not-synthesize.txt"),
+            speller_wordlist_path: p.join("filters/speller.txt"),
+            multitoken_list_path: p.join("filters/multitoken.txt"),
+            confusion_pairs_path: p.join("filters/confusion_pairs.txt"),
+            added_compound_path: p.join("filters/added_compound.txt"),
         }
     }
 }
@@ -163,6 +171,10 @@ pub fn compile(
     };
 
     let mut build_info = BuildInfo::new(Arc::new(tagger), regex_cache);
+    build_info.set_lang(lang_code.clone());
+
+    // auxiliary data for the ported Java rule filters
+    let filter_data = build_filter_data(&BuildFilePaths::new(&build_dir), lang_code.trim());
 
     // build the morphological synthesizer (used to inflect lemmas in suggestions)
     // from the synth dictionary dump and the manual addition / removal lists
@@ -218,13 +230,14 @@ pub fn compile(
         &mut build_info,
         chunker,
         multiword_tagger,
-        srx::SRX::from_str(&fs::read_to_string(&paths.srx_path)?)?.language_rules(lang_code),
+        srx::SRX::from_str(&fs::read_to_string(&paths.srx_path)?)?.language_rules(lang_code.clone()),
         tokenizer_lang_options,
     )?;
     tokenizer.to_writer(tokenizer_dest)?;
 
+    build_info.set_lang(lang_code.clone());
     info!("Creating grammar rules.");
-    let rules = Rules::from_xml(&paths.grammar_path, &mut build_info, rules_lang_options);
+    let rules = Rules::from_xml(&paths.grammar_path, &mut build_info, rules_lang_options, filter_data);
     rules.to_writer(rules_dest)?;
 
     // we need to write the regex cache after building the rules, otherwise it isn't fully populated
@@ -232,4 +245,148 @@ pub fn compile(
     bincode::serialize_into(f, build_info.mut_regex_cache())?;
 
     Ok(())
+}
+
+/// Builds the [FilterData] (speller, multitoken table, confusion pairs,
+/// compound parts) from the optional `filters/` files of the build dir.
+fn build_filter_data(
+    paths: &BuildFilePaths,
+    lang_code: &str,
+) -> crate::rule::filter_data::FilterData {
+    use crate::rule::filter_data::*;
+    use std::collections::HashMap;
+
+    let mut data = FilterData {
+        multitoken_speller_check: matches!(lang_code, "en" | "de" | "pt" | "nl"),
+        ..Default::default()
+    };
+
+    // speller word list -> FST
+    if paths.speller_wordlist_path.exists() {
+        let text = fs::read_to_string(&paths.speller_wordlist_path).unwrap_or_default();
+        let mut forms: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if seen.insert(line.to_string()) {
+                forms.push(line.to_string());
+            }
+        }
+
+        // optional frequency table (morfologik's 0..=25 rank per form)
+        let mut freq_by_form: HashMap<String, u8> = HashMap::new();
+        let freq_path = paths.speller_wordlist_path.with_file_name("freq.txt");
+        if freq_path.exists() {
+            if let Ok(text) = fs::read_to_string(&freq_path) {
+                for line in text.lines() {
+                    let mut it = line.splitn(2, '\t');
+                    let form = it.next().unwrap_or("").trim();
+                    let freq: u8 = it.next().unwrap_or("0").trim().parse().unwrap_or(0);
+                    if !form.is_empty() {
+                        freq_by_form.insert(form.to_string(), freq.min(25));
+                    }
+                }
+            }
+        }
+
+        // sorted lowercase key -> (index << 5) | frequency
+        let mut keyed: Vec<(String, usize, u8)> = forms
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                (
+                    f.to_lowercase(),
+                    i,
+                    freq_by_form.get(f).copied().unwrap_or(0),
+                )
+            })
+            .collect();
+        keyed.sort_by(|a, b| a.0.cmp(&b.0));
+        keyed.dedup_by(|a, b| a.0 == b.0);
+
+        let mut builder = fst::MapBuilder::memory();
+        for (key, idx, freq) in keyed {
+            let _ = builder.insert(key.as_bytes(), ((idx as u64) << 5) | freq as u64);
+        }
+        data.speller = Some(SpellerDict {
+            map_bytes: builder.into_inner().unwrap_or_default(),
+            forms,
+        });
+    }
+
+    // multitoken suggestion list
+    if paths.multitoken_list_path.exists() {
+        let text = fs::read_to_string(&paths.multitoken_list_path).unwrap_or_default();
+        let mut suggester = MultitokenSuggester::default();
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+            let key = MultitokenSuggester::normalize_key(&line);
+            if !key.contains(' ') {
+                // one-token suggestions are provided by other rules
+                continue;
+            }
+            let first_char = key.chars().next().unwrap_or(' ');
+            suggester
+                .by_char
+                .entry(first_char)
+                .or_default()
+                .entry(key.clone())
+                .or_default()
+                .push(line.clone());
+            suggester
+                .no_spaces
+                .entry(key.replace(' ', ""))
+                .or_default()
+                .push(line);
+        }
+        data.multitoken = Some(suggester);
+    }
+
+    // confusion pairs: wrong;correct;POSTAG
+    if paths.confusion_pairs_path.exists() {
+        let text = fs::read_to_string(&paths.confusion_pairs_path).unwrap_or_default();
+        let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split(';').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            map.entry(parts[0].trim().to_lowercase())
+                .or_default()
+                .push((parts[1].trim().to_string(), parts[2].trim().to_string()));
+        }
+        data.confusion_pairs = Some(map);
+    }
+
+    // German added compounds: part1;part2
+    if paths.added_compound_path.exists() {
+        let text = fs::read_to_string(&paths.added_compound_path).unwrap_or_default();
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = line.split(';').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            map.entry(parts[0].trim().to_lowercase())
+                .or_default()
+                .push(parts[1].trim().to_lowercase());
+        }
+        data.added_compound = Some(map);
+    }
+
+    data
 }

@@ -398,6 +398,7 @@ impl Rules {
         path: P,
         build_info: &mut BuildInfo,
         options: RulesLangOptions,
+        filter_data: crate::rule::filter_data::FilterData,
     ) -> Self {
         let rules = super::parse_structure::read_rules(path);
         let mut errors: HashMap<String, usize> = HashMap::new();
@@ -492,6 +493,7 @@ impl Rules {
         Rules {
             rules,
             synth: build_info.synthesizer().cloned(),
+            filter_data,
         }
     }
 }

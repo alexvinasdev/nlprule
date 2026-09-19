@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+pub mod filter_data;
+pub mod filter_java;
 pub(crate) mod disambiguation;
 pub(crate) mod engine;
 pub(crate) mod grammar;
@@ -205,6 +207,16 @@ impl DisambiguationRule {
         tokenizer: &Tokenizer,
         synth: Option<&MorphSynthesizer>,
     ) -> bool {
+        self.test_with_synth_and_data(tokenizer, synth, None)
+    }
+
+    /// Like [Rule::test_with_synth], with the shared filter data (speller etc.).
+    pub fn test_with_synth_and_data(
+        &self,
+        tokenizer: &Tokenizer,
+        synth: Option<&MorphSynthesizer>,
+        filter_data: Option<&crate::rule::filter_data::FilterData>,
+    ) -> bool {
         let mut passes = Vec::new();
 
         for (i, test) in self.examples.iter().enumerate() {
@@ -300,6 +312,7 @@ impl DisambiguationRule {
 pub struct Suggestions<'a, 't> {
     rule: &'a Rule,
     synth: Option<&'a MorphSynthesizer>,
+    filter_data: Option<&'a crate::rule::filter_data::FilterData>,
     matches: EngineMatches<'a, 't>,
     sentence: &'t MatchSentence<'t>,
 }
@@ -311,6 +324,7 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
         let rule = self.rule;
         let sentence = self.sentence;
         let synth = self.synth;
+        let filter_data = self.filter_data;
         let (start, end) = (self.rule.start, self.rule.end);
 
         self.matches.find_map(|graph| {
@@ -361,23 +375,57 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
             }
 
             // apply the rule's post-filter (LT `<filter>`) if any
-            let replacements = if let Some(filter) = &rule.post_filter {
+            let (replacements, filter_message) = if let Some(filter) = &rule.post_filter {
                 let matched_text = sentence.slice(Span::from_positions(start, end)).to_string();
+                let message = rule
+                    .message
+                    .apply(sentence, &graph, rule.start, rule.end, synth)
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default();
+
+                // indices of the sentence tokens covered by the WHOLE pattern
+                // (LT filter `\N` backreferences refer to all matched elements,
+                // not just the marker range)
+                let matched_tokens: Vec<usize> = graph
+                    .groups()
+                    .iter()
+                    .flat_map(|group| {
+                        let tokens: Vec<_> = group.tokens(sentence).collect();
+                        tokens
+                    })
+                    .filter_map(|token| {
+                        sentence.iter().position(|x| std::ptr::eq(x, token))
+                    })
+                    .collect::<Vec<usize>>();
+                let mut seen = std::collections::HashSet::new();
+                let matched_tokens: Vec<usize> = matched_tokens
+                    .into_iter()
+                    .filter(|idx| seen.insert(*idx))
+                    .collect();
+
+                let empty_data = crate::rule::filter_data::FilterData::default();
+                let data = filter_data.unwrap_or(&empty_data);
+
                 match filter.apply(
                     sentence,
                     Span::from_positions(start, end),
                     replacements,
                     &matched_text,
+                    &message,
+                    &matched_tokens,
+                    synth,
+                    data,
                 ) {
                     Some(filtered) => {
                         start = filtered.span.start();
                         end = filtered.span.end();
-                        filtered.replacements
+                        (filtered.replacements, filtered.message)
                     }
                     None => return None,
                 }
             } else {
-                replacements
+                (replacements, None)
             };
 
             let text_before = sentence.slice(Span::from_positions(start, end));
@@ -391,13 +439,16 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
 
             if !replacements.is_empty() || rule.suggesters.is_empty() {
                 // rules without suggestion elements report an error without replacements
-                Some(Suggestion::new(
-                    rule.id.to_string(),
+                let message = filter_message.unwrap_or_else(|| {
                     rule.message
                         .apply(sentence, &graph, rule.start, rule.end, synth)
                         .into_iter()
                         .next()
-                        .unwrap_or_default(),
+                        .unwrap_or_default()
+                });
+                Some(Suggestion::new(
+                    rule.id.to_string(),
+                    message,
                     Span::from_positions(start, end),
                     replacements,
                 ))
@@ -501,16 +552,18 @@ impl Rule {
     }
 
     pub(crate) fn apply<'a, 't>(&'a self, sentence: &'t MatchSentence<'t>) -> Suggestions<'a, 't> {
-        self.apply_with_synth(sentence, None)
+        self.apply_with_synth(sentence, None, None)
     }
 
     pub(crate) fn apply_with_synth<'a, 't>(
         &'a self,
         sentence: &'t MatchSentence<'t>,
         synth: Option<&'a MorphSynthesizer>,
+        filter_data: Option<&'a crate::rule::filter_data::FilterData>,
     ) -> Suggestions<'a, 't> {
         Suggestions {
             synth,
+            filter_data,
             matches: self.engine.get_matches(sentence, self.start, self.end),
             rule: &self,
             sentence,
@@ -529,6 +582,16 @@ impl Rule {
         &self,
         tokenizer: &Tokenizer,
         synth: Option<&MorphSynthesizer>,
+    ) -> bool {
+        self.test_with_synth_and_data(tokenizer, synth, None)
+    }
+
+    /// Like [Rule::test_with_synth], with the shared filter data (speller etc.).
+    pub fn test_with_synth_and_data(
+        &self,
+        tokenizer: &Tokenizer,
+        synth: Option<&MorphSynthesizer>,
+        filter_data: Option<&crate::rule::filter_data::FilterData>,
     ) -> bool {
         let mut passes = Vec::new();
 
@@ -550,7 +613,7 @@ impl Rule {
 
             info!("Sentence: {:#?}", sentence);
             let suggestions: Vec<_> = self
-                .apply_with_synth(&MatchSentence::new(&sentence), synth)
+                .apply_with_synth(&MatchSentence::new(&sentence), synth, filter_data)
                 .map(|mut s| {
                     // rules without a suggestion report an error without replacements;
                     // the expected replacement is the empty string in that case

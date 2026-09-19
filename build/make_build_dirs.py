@@ -262,6 +262,152 @@ def simple_replace_rules(tables):
     return "\n".join(parts)
 
 
+
+MULTITOKEN_LISTS = {
+    "en": ["en/multiwords.txt"],
+    "de": ["de/multitoken-suggest.txt", "de/hunspell/spelling.txt"],
+    "fr": ["fr/multiwords.txt", "fr/hyphenated_words.txt"],
+    "es": ["es/multiwords.txt", "es/hyphenated_words.txt"],
+    "ca": ["ca/multiwords.txt", "ca/hyphenated_words.txt"],
+    "pt": ["pt/multiwords.txt", "pt/hyphenated_words.txt"],
+    "nl": ["nl/multiwords.txt"],
+}
+
+# extra (jar-borne) speller dictionaries to dump per language:
+# (jar name, resource path stem relative to org/languagetool/resource)
+SPELLER_DICTS = {
+    "ca": [("catalan-pos-dict.jar", "ca/ca-ES_spelling")],
+    "de": [(None, "de/hunspell/de_DE")],  # loose in the dist
+    "nl": [("dutch-pos-dict.jar", "nl/spelling/nl_NL")],
+    "pt": [("portuguese-pos-dict.jar", "pt/spelling/pt-PT-90")],
+    "ru": [(None, "ru/hunspell/ru_RU")],
+    "pl": [(None, "pl/hunspell/pl_PL")],
+}
+
+# plain-text word lists added to the speller vocabulary per language
+SPELLER_LISTS = {
+    "en": ["en/hunspell/spelling.txt", "en/hunspell/ignore.txt"],
+    "de": ["de/hunspell/spelling.txt", "de/hunspell/ignore.txt", "de/added.txt"],
+    "fr": ["fr/added.txt"],
+    "es": ["es/hunspell/spelling.txt", "es/hunspell/ignore.txt"],
+    "ca": ["ca/spelling.txt", "ca/added.txt", "ca/hunspell/ignore.txt"],
+    "nl": ["nl/added.txt"],
+    "ru": ["ru/hunspell/spelling.txt", "ru/hunspell/ignore.txt", "ru/added.txt"],
+    "pt": [],
+    "pl": ["pl/hunspell/ignore.txt"],
+}
+
+
+def _words_from_lines(text):
+    words = set()
+    for line in text.splitlines():
+        line = line.split("#")[0].strip()
+        if not line:
+            continue
+        # added.txt/removed.txt style "form\tlemma\tpos" or plain word lists
+        first = line.split("\t")[0].strip()
+        if first:
+            words.add(first)
+    return words
+
+
+def make_filter_data(lang, lt_dir, resource_dir, dist_rules, out_dir, java, classpath):
+    """Create the `filters/` directory with data for the runtime Java filters."""
+    filters = out_dir / "filters"
+    filters.mkdir(exist_ok=True)
+    work = out_dir / ".filter_work"
+    work.mkdir(exist_ok=True)
+
+    spelling_global = work / "spelling_global.txt"
+    if not spelling_global.exists():
+        with ZipFile(lt_dir / "libs" / "languagetool-core.jar") as zf:
+            spelling_global.write_bytes(
+                zf.read("org/languagetool/resource/spelling_global.txt")
+            )
+
+    # multitoken suggestion list
+    if lang in MULTITOKEN_LISTS:
+        lines = [spelling_global.read_text(encoding="utf-8", errors="replace")]
+        for rel in MULTITOKEN_LISTS[lang]:
+            path = lt_dir / "org" / "languagetool" / "resource" / rel
+            if path.exists():
+                lines.append(path.read_text(encoding="utf-8", errors="replace"))
+            else:
+                logging.warning("multitoken list missing: %s", path)
+        (filters / "multitoken.txt").write_text("\n".join(lines), encoding="utf-8")
+
+    # speller vocabulary: tagger dump forms + dumped speller dicts + plain lists
+    words = set()
+    tagger_dump = out_dir / "tags" / "output.dump"
+    if tagger_dump.exists():
+        with tagger_dump.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                form = line.split("\t")[0]
+                if form:
+                    words.add(form)
+    for jar, stem in SPELLER_DICTS.get(lang, []):
+        parts = stem.split("/")
+        sub = lt_dir / "org" / "languagetool" / "resource" / "/".join(parts[:-1])
+        name = parts[-1]
+        extracted = {}
+        for suffix in (".dict", ".info"):
+            loose = sub / f"{name}{suffix}"
+            target = work / f"{lang}_{name}{suffix}"
+            if loose.exists():
+                copyfile(loose, target)
+                extracted[suffix] = target
+            elif jar:
+                with ZipFile(lt_dir / "libs" / jar) as zf:
+                    entry = (
+                        "org/languagetool/resource/"
+                        + "/".join(parts)
+                        + suffix
+                    )
+                    try:
+                        target.write_bytes(zf.read(entry))
+                        extracted[suffix] = target
+                    except KeyError:
+                        logging.warning("%s not found in %s", entry, jar)
+        if ".dict" in extracted and ".info" in extracted:
+            dump = work / f"{lang}_{name}_speller.dump"
+            if dump_dictionary(java, classpath, extracted[".dict"], extracted[".info"], dump):
+                words |= _words_from_lines(dump.read_text(encoding="utf-8", errors="replace"))
+    for rel in SPELLER_LISTS.get(lang, []):
+        path = lt_dir / "org" / "languagetool" / "resource" / rel
+        if path.exists():
+            words |= _words_from_lines(path.read_text(encoding="utf-8", errors="replace"))
+    if lang in MULTITOKEN_LISTS and (filters / "multitoken.txt").exists():
+        pass  # multitoken entries are covered by the lists above via the tagger dump
+    if words:
+        (filters / "speller.txt").write_text(
+            "\n".join(sorted(words)) + "\n", encoding="utf-8"
+        )
+
+    # confusion pairs
+    pair_sources = []
+    if lang in ("es", "ca"):
+        pair_sources = [dist_rules / "confusion_pairs.txt"]
+    elif lang == "pt":
+        pair_sources = [
+            dist_rules / "confusion_pairs.txt",
+            dist_rules / "pt-PT" / "confusion_pairs.txt",
+        ]
+    pair_text = []
+    for src in pair_sources:
+        if src.exists():
+            pair_text.append(src.read_text(encoding="utf-8", errors="replace"))
+    if pair_text:
+        (filters / "confusion_pairs.txt").write_text("\n".join(pair_text), encoding="utf-8")
+
+    # German compound parts
+    if lang == "de":
+        src = dist_rules / "addedCompound.txt"
+        if src.exists():
+            copyfile(src, filters / "added_compound.txt")
+
+    logging.info("%s: filter data written to %s", lang, filters)
+
+
 def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
     dist_rules = lt_dir / "org" / "languagetool" / "rules" / lang
     resource_dir = lt_dir / "org" / "languagetool" / "resource" / lang
@@ -501,6 +647,8 @@ def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
         dist_disambig if dist_disambig.exists() else disambig,
         disambig,
     )
+
+    make_filter_data(lang, lt_dir, resource_dir, dist_rules, out_dir, java, classpath)
 
     (out_dir / "lang_code.txt").write_text(lang)
     logging.info("%s: done", lang)

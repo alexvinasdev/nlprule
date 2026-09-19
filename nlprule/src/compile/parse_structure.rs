@@ -54,6 +54,7 @@ pub(crate) struct BuildInfo {
     tagger: Arc<Tagger>,
     regex_cache: RegexCache,
     synthesizer: Option<Arc<crate::rule::synthesizer::Synthesizer>>,
+    lang: String,
 }
 
 impl BuildInfo {
@@ -62,7 +63,16 @@ impl BuildInfo {
             tagger,
             regex_cache,
             synthesizer: None,
+            lang: String::new(),
         }
+    }
+
+    pub fn set_lang(&mut self, lang: String) {
+        self.lang = lang;
+    }
+
+    pub fn lang(&self) -> &str {
+        &self.lang
     }
 
     pub fn tagger(&self) -> &Arc<Tagger> {
@@ -441,12 +451,6 @@ fn parse_match(m: structure::Match, engine: &Engine, info: &mut BuildInfo) -> Re
         .expect("no must be parsable as usize.");
 
     let postag = if let Some(postag) = m.postag {
-        if postag.contains("+DT") || postag.contains("+INDT") {
-            return Err(Error::Unimplemented(
-                "+DT and +INDT determiners are not implemented.".into(),
-            ));
-        }
-
         match m.postag_regex.as_deref() {
             Some("yes") => Some(PosTagSelector::Regex {
                 regex: Regex::from_java_regex(&postag, true, true)?,
@@ -750,7 +754,7 @@ impl Rule {
         let post_filter = data
             .filter
             .as_ref()
-            .map(|filter| parse_post_filter(filter))
+            .map(|filter| parse_post_filter(filter, info))
             .transpose()?;
 
         let (engine, start, end) = match (&data.pattern, data.regex) {
@@ -964,8 +968,10 @@ impl Rule {
 }
 
 /// Maps an LT `<filter>` (class + args) to a runtime [PostFilter].
-/// Unsupported classes return an error so the rule is skipped, as before.
-fn parse_post_filter(filter: &structure::Filter) -> Result<PostFilter, Error> {
+/// Ported Java filter classes become [PostFilter::Java]; unsupported classes
+/// return an error so the rule is skipped, as before.
+fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result<PostFilter, Error> {
+    use crate::rule::filter_java::{DateLang, FindSuggVariant, JClass, JavaFilter};
     use crate::rule::post_filter::{PostFilter, UnderlineMode};
 
     let name = filter
@@ -974,7 +980,38 @@ fn parse_post_filter(filter: &structure::Filter) -> Result<PostFilter, Error> {
         .next_back()
         .unwrap_or_else(|| filter.class.as_str());
 
-    let args: DefaultHashMap<String, String> = filter
+    // language module of the class, e.g. `en` in
+    // `org.languagetool.rules.en.FutureDateFilter`
+    let package = filter
+        .class
+        .trim_start_matches("org.languagetool.rules.")
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let _lang = info.lang().trim().to_string();
+
+    let date_lang = |package: &str| -> Option<DateLang> {
+        match package {
+            "en" => Some(DateLang::En),
+            "de" => Some(DateLang::De),
+            "fr" => Some(DateLang::Fr),
+            "es" => Some(DateLang::Es),
+            "ca" => Some(DateLang::Ca),
+            "it" => Some(DateLang::It),
+            "nl" => Some(DateLang::Nl),
+            "pt" => Some(DateLang::Pt),
+            "ru" => Some(DateLang::Ru),
+            "pl" => Some(DateLang::Pl),
+            "uk" => Some(DateLang::Uk),
+            "sr" => Some(DateLang::Sr),
+            "br" => Some(DateLang::Br),
+            "eo" => Some(DateLang::Eo),
+            _ => None,
+        }
+    };
+
+    let args: Vec<(String, String)> = filter
         .args
         .split(' ')
         .filter_map(|x| {
@@ -987,9 +1024,36 @@ fn parse_post_filter(filter: &structure::Filter) -> Result<PostFilter, Error> {
         })
         .collect();
 
+    fn make_java(
+        class: JClass,
+        args: Vec<(String, String)>,
+        regex_keys: &[&str],
+    ) -> Result<PostFilter, Error> {
+        let mut regex_args = Vec::new();
+        for key in regex_keys {
+            if let Some((_, value)) = args.iter().find(|(k, _)| k == key) {
+                let regex = Regex::from_java_regex(value, false, false)?;
+                regex_args.push((key.to_string(), regex));
+            }
+        }
+        Ok(PostFilter::Java(JavaFilter {
+            class,
+            args,
+            regex_args,
+        }))
+    }
+    let make_java = |class: JClass, regex_keys: &[&str]| {
+        make_java(class, args.clone(), regex_keys)
+    };
+    let arg_value = |key: &str| -> Option<&str> {
+        args.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    };
+
     match name {
         "UnderlineSpacesFilter" => Ok(PostFilter::UnderlineSpaces {
-            mode: match args.get("underlineSpaces").map(|x| x.as_str()) {
+            mode: match arg_value("underlineSpaces") {
                 Some("before") => UnderlineMode::Before,
                 Some("after") => UnderlineMode::After,
                 Some("both") => UnderlineMode::Both,
@@ -997,14 +1061,10 @@ fn parse_post_filter(filter: &structure::Filter) -> Result<PostFilter, Error> {
             },
         }),
         "ApostropheTypeFilter" => Ok(PostFilter::ApostropheType {
-            has_typographic: args
-                .get("hasTypographicalApostrophe")
-                .map(|x| x == "true")
-                .unwrap_or(false),
+            has_typographic: arg_value("hasTypographicalApostrophe") == Some("true"),
         }),
         "RegexAntiPatternFilter" => Ok(PostFilter::RegexAntiPattern {
-            regexes: args
-                .get("antipatterns")
+            regexes: arg_value("antipatterns")
                 .ok_or_else(|| {
                     Error::Unexpected("RegexAntiPatternFilter must have `antipatterns`".into())
                 })?
@@ -1013,13 +1073,84 @@ fn parse_post_filter(filter: &structure::Filter) -> Result<PostFilter, Error> {
                 .collect::<Result<Vec<_>, Error>>()?,
         }),
         "AdaptSuggestionsFilter" => Ok(PostFilter::AdaptSuggestions),
+        "DateCheckFilter" => {
+            let dl = date_lang(&package)
+                .ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?;
+            // languages whose DateCheckFilter extends AbstractDateCheckWithSuggestionsFilter
+            let with_suggestions = matches!(package.as_str(), "en" | "de" | "fr" | "es" | "ca" | "nl" | "pt");
+            make_java(JClass::DateCheck { lang: dl, with_suggestions }, &[])
+        }
+        "YMDDateCheckFilter" => {
+            let dl = date_lang(&package)
+                .ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?;
+            make_java(JClass::YMDDateCheck { lang: dl }, &[])
+        }
+        "DMYDateCheckFilter" => {
+            let dl = date_lang(&package)
+                .ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?;
+            make_java(JClass::DMYDateCheck { lang: dl }, &[])
+        }
+        "FutureDateFilter" => {
+            let dl = date_lang(&package)
+                .ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?;
+            make_java(JClass::FutureDate { lang: dl }, &[])
+        }
+        "NewYearDateFilter" => make_java(JClass::NewYearDate { lang: date_lang(&package).ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?, ymd: false }, &[]),
+        "YMDNewYearDateFilter" => make_java(JClass::NewYearDate { lang: date_lang(&package).ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?, ymd: true }, &[]),
+        "RecentYearFilter" => make_java(JClass::RecentYear, &[]),
+        "DateRangeChecker" => make_java(JClass::DateRange, &[]),
+        "ShortenedYearRangeChecker" => make_java(JClass::ShortenedYearRange, &[]),
+        "WhitespaceCheckFilter" => make_java(JClass::WhitespaceCheck, &[]),
+        "MultitokenSpellerFilter" => make_java(JClass::MultitokenSpeller, &[]),
+        "OrdinalSuffixFilter" => make_java(JClass::OrdinalSuffix, &[]),
+        "CompoundCheckFilter" => make_java(JClass::CompoundCheck, &[]),
+        "CompoundFilter" if package.as_str() == "nl" => make_java(JClass::NlCompound, &[]),
+        "INNNumberFilter" => make_java(JClass::InnNumber, &[]),
+        "DecadeSpellingFilter" => make_java(JClass::DecadeSpelling, &[]),
+        "UppercaseNounReadingFilter" => make_java(JClass::UppercaseNounReading, &[]),
+        "ConvertToSentenceCaseFilter" | "EnglishConvertToSentenceCaseFilter" => {
+            make_java(JClass::ConvertToSentenceCase, &[])
+        }
+        "RomanNumeralFilter" => make_java(JClass::RomanNumeral, &[]),
+        "RegularIrregularParticipleFilter" => make_java(JClass::RegularIrregularParticiple, &[]),
+        "ValidWordFilter" => make_java(JClass::ValidWord, &[]),
+        "RemoveUnknownCompoundsFilter" => make_java(JClass::RemoveUnknownCompounds, &[]),
+        "ConfusionCheckFilter" => make_java(JClass::ConfusionCheck, &[]),
+        "DiacriticsCheckFilter" => make_java(JClass::DiacriticsCheck, &[]),
+        "AddCommasFilter" => make_java(JClass::AddCommas, &[]),
+        "AdvancedSynthesizerFilter" | "ArabicAdvancedSynthesizerFilter" => {
+            make_java(JClass::AdvancedSynthesizer, &["lemmaSelect", "postagSelect"])
+        }
+        "RussianPartialPosTagFilter"
+        | "NoDisambiguationRussianPartialPosTagFilter"
+        | "IrishPartialPosTagFilter"
+        | "NoDisambiguationIrishPartialPosTagFilter"
+        | "EnglishPartialPosTagFilter"
+        | "NoDisambiguationEnglishPartialPosTagFilter"
+        | "FrenchPartialPosTagFilter"
+        | "NoDisambiguationFrenchPartialPosTagFilter" => {
+            make_java(JClass::PartialPosTag, &["regexp", "postag_regexp"])
+        }
+        "FindSuggestionsFilter" => {
+            let variant = match package.as_str() {
+                "en" => FindSuggVariant::En,
+                "fr" => FindSuggVariant::Fr,
+                "es" => FindSuggVariant::Es,
+                "ca" => FindSuggVariant::Ca,
+                _ => {
+                    return Err(Error::Unimplemented(format!(
+                        "filter {} is not implemented.",
+                        name
+                    )))
+                }
+            };
+            make_java(
+                JClass::FindSuggestions { variant },
+                &["desiredPostag", "priorityPostag", "removeSuggestionsRegexp"],
+            )
+        }
         x if x.ends_with("SuppressMisspelledSuggestionsFilter") => {
-            Ok(PostFilter::SuppressMisspelled {
-                suppress_match: args
-                    .get("suppressMatch")
-                    .map(|x| x != "false")
-                    .unwrap_or(true),
-            })
+            make_java(JClass::SuppressMisspelledSuggestions, &[])
         }
         x => Err(Error::Unimplemented(format!("filter {} is not implemented.", x))),
     }

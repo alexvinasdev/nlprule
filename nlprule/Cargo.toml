@@ -22,7 +22,7 @@ itertools = "0.10"
 enum_dispatch = "0.3"
 unicase = "2.6"
 derivative = "2.2"
-fst = "0.4"
+fst = { version = "0.4", features = ["levenshtein"] }
 fs-err = "2.5"
 aho-corasick = "0.7"
 half = { version = "1.7", features = ["serde"] }

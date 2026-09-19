@@ -349,6 +349,11 @@ pub struct Token {
     pub min: Option<String>,
     pub max: Option<String>,
     pub skip: Option<String>,
+    /// Token type attribute (LT 6.x); accepted but unused.
+    #[serde(rename = "type")]
+    pub token_type: Option<String>,
+    /// LT 6.x attribute; accepted but unused.
+    pub raw_pos: Option<String>,
     pub unify: Option<String>,
     pub case_sensitive: Option<String>,
     pub inflected: Option<String>,
@@ -523,6 +528,9 @@ pub struct RuleGroup {
     pub antipatterns: Option<Vec<Pattern>>,
     pub default: Option<String>,
     pub name: String,
+    /// Rule type attribute (LT 6.x, e.g. 'typographical'); accepted but unused.
+    #[serde(rename = "type")]
+    pub rule_type: Option<String>,
     /// Rule metadata tag (LT 6.x); accepted but unused.
     pub tags: Option<String>,
     pub short: Option<XmlText>,
@@ -572,6 +580,8 @@ pub struct DisambiguationMatch {
     pub no: usize,
     pub postag: Option<String>,
     pub postag_regexp: Option<String>,
+    /// Case conversion of the referenced token's text; accepted but unused.
+    pub case_conversion: Option<String>,
     /// Element content: the literal text the referenced token must have.
     #[serde(rename = "$value")]
     pub content: Option<XmlString>,

@@ -3,6 +3,10 @@
 //! on a fired rule match (adjusting its span, its replacements, or rejecting it).
 
 use crate::rule::engine::composition::MatchSentence;
+use crate::rule::filter_java::{FilterCtx, JavaFilter};
+use crate::rule::synthesizer::Synthesizer;
+use crate::rule::filter_data::FilterData;
+use crate::tokenizer::tag::Tagger;
 use crate::types::Span;
 use crate::utils::regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -17,8 +21,8 @@ pub enum PostFilter {
     /// Mirrors `RegexAntiPatternFilter`: rejects the match if any regex matches
     /// the sentence text overlapping the match span.
     RegexAntiPattern { regexes: Vec<Regex> },
-    /// Mirrors `AdaptSuggestionsFilter` (`Language.adaptSuggestion`): adapts the
-    /// case of the replacements to the original error text.
+    /// Mirrors `AdaptSuggestionsFilter` (`Language.adaptSuggestion`): adapts
+    /// the case of the replacements to the original error text.
     AdaptSuggestions,
     /// Mirrors `*SuppressMisspelledSuggestionsFilter`: drops replacements that
     /// are not in the analyzer dictionary (approximating LT's spellchecker check).
@@ -26,6 +30,9 @@ pub enum PostFilter {
     /// (unless `suppress_match` is false, in which case the original
     /// replacements are kept).
     SuppressMisspelled { suppress_match: bool },
+    /// A ported Java `RuleFilter` class (dates, multitoken speller,
+    /// find-suggestions, advanced synthesizer, ...).
+    Java(JavaFilter),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,17 +48,45 @@ const TYPOGRAPHIC_APOSTROPHE: char = '\u{2019}';
 pub struct FilteredMatch {
     pub span: Span,
     pub replacements: Vec<String>,
+    /// If set, replaces the rule's expanded message.
+    pub message: Option<String>,
 }
 
 impl PostFilter {
     /// Applies this filter. Returns `None` if the match should be rejected.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply(
         &self,
         sentence: &MatchSentence,
         span: Span,
         replacements: Vec<String>,
         matched_text: &str,
+        message: &str,
+        matched_tokens: &[usize],
+        synth: Option<&Synthesizer>,
+        filter_data: &FilterData,
     ) -> Option<FilteredMatch> {
+        if let PostFilter::Java(filter) = self {
+            let mut ctx = FilterCtx {
+                sentence,
+                tagger: sentence.tagger(),
+                synth,
+                data: filter_data,
+                message: message.to_string(),
+                span,
+                replacements,
+                matched_text: matched_text.to_string(),
+                matched_tokens: matched_tokens.to_vec(),
+                filter_args: None,
+                filter_regex_args: None,
+            };
+            return filter.apply(&mut ctx).map(|outcome| FilteredMatch {
+                span: outcome.span,
+                replacements: outcome.replacements,
+                message: outcome.message,
+            });
+        }
+
         match self {
             PostFilter::UnderlineSpaces { mode } => {
                 let text = sentence.text();
@@ -59,13 +94,15 @@ impl PostFilter {
                 let mut end = span.byte().end;
 
                 if matches!(mode, UnderlineMode::Before | UnderlineMode::Both) {
-                    while start > 0 && text[..start].chars().last().map_or(false, char::is_whitespace)
+                    while start > 0
+                        && text[..start].chars().last().map_or(false, char::is_whitespace)
                     {
                         start -= text[..start].chars().last().unwrap().len_utf8();
                     }
                 }
                 if matches!(mode, UnderlineMode::After | UnderlineMode::Both) {
-                    while end < text.len() && text[end..].chars().next().map_or(false, char::is_whitespace)
+                    while end < text.len()
+                        && text[end..].chars().next().map_or(false, char::is_whitespace)
                     {
                         end += text[end..].chars().next().unwrap().len_utf8();
                     }
@@ -80,6 +117,7 @@ impl PostFilter {
                 Some(FilteredMatch {
                     span: out,
                     replacements,
+                    message: None,
                 })
             }
             PostFilter::ApostropheType {
@@ -87,7 +125,11 @@ impl PostFilter {
             } => {
                 let contains = matched_text.contains(TYPOGRAPHIC_APOSTROPHE);
                 if contains == *has_typographic {
-                    Some(FilteredMatch { span, replacements })
+                    Some(FilteredMatch {
+                        span,
+                        replacements,
+                        message: None,
+                    })
                 } else {
                     None
                 }
@@ -105,7 +147,11 @@ impl PostFilter {
                     }
                 }
 
-                Some(FilteredMatch { span, replacements })
+                Some(FilteredMatch {
+                    span,
+                    replacements,
+                    message: None,
+                })
             }
             PostFilter::AdaptSuggestions => {
                 // adapt the case of each replacement to the original error text,
@@ -115,7 +161,11 @@ impl PostFilter {
                     .map(|replacement| adapt_case(&replacement, matched_text))
                     .collect();
 
-                Some(FilteredMatch { span, replacements })
+                Some(FilteredMatch {
+                    span,
+                    replacements,
+                    message: None,
+                })
             }
             PostFilter::SuppressMisspelled { suppress_match } => {
                 let tagger = sentence.tagger();
@@ -130,15 +180,21 @@ impl PostFilter {
                     if *suppress_match {
                         None
                     } else {
-                        Some(FilteredMatch { span, replacements })
+                        Some(FilteredMatch {
+                            span,
+                            replacements,
+                            message: None,
+                        })
                     }
                 } else {
                     Some(FilteredMatch {
                         span,
                         replacements: known,
+                        message: None,
                     })
                 }
             }
+            PostFilter::Java(_) => unreachable!("handled above"),
         }
     }
 }
@@ -165,13 +221,10 @@ fn adapt_case(input: &str, sample: &str) -> String {
 /// Whether a replacement is considered correctly spelled:
 /// every alphabetic part is in the analyzer dictionary (as-is, lowercased
 /// or title-cased). Approximates LT's spellchecker-based check.
-fn is_known_word(replacement: &str, tagger: &crate::tokenizer::tag::Tagger) -> bool {
+fn is_known_word(replacement: &str, tagger: &Tagger) -> bool {
     let parts: Vec<&str> = replacement
         .split(|c: char| {
-            c.is_whitespace()
-                || crate::utils::splitting_chars()
-                    .chars()
-                    .any(|s| s == c)
+            c.is_whitespace() || crate::utils::splitting_chars().chars().any(|s| s == c)
         })
         .filter(|p| p.chars().any(char::is_alphabetic))
         .collect();
@@ -182,10 +235,7 @@ fn is_known_word(replacement: &str, tagger: &crate::tokenizer::tag::Tagger) -> b
 
     parts.iter().all(|part| {
         tagger.id_word((*part).into()).1.is_some()
-            || tagger
-                .id_word(part.to_lowercase().into())
-                .1
-                .is_some()
+            || tagger.id_word(part.to_lowercase().into()).1.is_some()
             || tagger.id_word(part.to_uppercase().into()).1.is_some()
     })
 }

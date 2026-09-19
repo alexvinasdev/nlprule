@@ -190,6 +190,120 @@ pub enum IncludeSkipped {
 /// (mirroring `toFinalString`'s `oneForm` handling).
 const SPECIAL_TAGS: [&str; 3] = ["SENT_START", "SENT_END", "PARAGRAPH_END"];
 
+
+// ---------------------------------------------------------------------------
+// English a/an determiner synthesis (LT `EnglishSynthesizer`'s +DT / +INDT tags)
+// ---------------------------------------------------------------------------
+
+mod avsan {
+    use once_cell::sync::Lazy;
+    use std::collections::HashSet;
+
+    struct Sets {
+        requiring_a: HashSet<String>,
+        requiring_an: HashSet<String>,
+    }
+
+    static SETS: Lazy<Sets> = Lazy::new(|| {
+        fn load(text: &'static str) -> HashSet<String> {
+            let mut set = HashSet::new();
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some(word) = line.strip_prefix('*') {
+                    // case-sensitive entry
+                    set.insert(word.trim().to_string());
+                } else {
+                    set.insert(line.to_lowercase());
+                }
+            }
+            set
+        }
+        Sets {
+            requiring_a: load(include_str!("../../configs/en/det_a.txt")),
+            requiring_an: load(include_str!("../../configs/en/det_an.txt")),
+        }
+    });
+
+    fn lowercase_first_if_capitalized(word: &str) -> String {
+        let mut chars = word.chars();
+        match chars.next() {
+            Some(c) if c.is_uppercase() => {
+                let rest: String = chars.collect();
+                // only lowercase when the word is not all-uppercase
+                if !rest.chars().all(|x| !x.is_lowercase()) {
+                    c.to_lowercase().collect::<String>() + &rest
+                } else {
+                    word.to_string()
+                }
+            }
+            _ => word.to_string(),
+        }
+    }
+
+    /// Mirrors `AvsAnRule.suggestAorAn`: returns "a word" / "an word", or the
+    /// plain word when the determiner is unknown.
+    pub(crate) fn lowercase_first_pub(word: &str) -> String {
+        lowercase_first_if_capitalized(word)
+    }
+
+    pub(crate) fn suggest_a_or_an(orig_word: &str) -> String {
+        let mut word = orig_word.to_string();
+        let parts: Vec<&str> = word
+            .split(|c: char| matches!(c, '-' | '"' | '\u{201C}' | '\'' | '\u{2018}' | '(' | ')' | '[' | ']'))
+            .collect();
+        if let Some(first) = parts.first() {
+            if !first.eq_ignore_ascii_case("a") {
+                word = first.to_string();
+            }
+        }
+        let cleaned: String = word
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || "α.;,:'".contains(*c))
+            .collect();
+        if !cleaned.is_empty() {
+            word = cleaned;
+        } else {
+            return orig_word.to_string();
+        }
+
+        let in_a = SETS.requiring_a.contains(&word.to_lowercase())
+            || SETS.requiring_a.contains(&word);
+        let in_an = SETS.requiring_an.contains(&word.to_lowercase())
+            || SETS.requiring_an.contains(&word);
+
+        let use_a = if in_a && in_an {
+            true // A_OR_AN -> "a"
+        } else if in_a {
+            true
+        } else if in_an {
+            false
+        } else {
+            let first = word.chars().next().unwrap_or('a');
+            let is_vowel = matches!(
+                first.to_lowercase().next(),
+                Some('a') | Some('e') | Some('i') | Some('o') | Some('u')
+            );
+            let all_upper =
+                word.chars().any(char::is_alphabetic) && word.chars().all(|c| !c.is_lowercase());
+            let mixed = word.chars().any(char::is_uppercase)
+                && word.chars().any(char::is_lowercase);
+            if all_upper || mixed {
+                return orig_word.to_string();
+            }
+            !is_vowel
+        };
+
+        if use_a {
+            format!("a {}", lowercase_first_if_capitalized(orig_word))
+        } else {
+            format!("an {}", lowercase_first_if_capitalized(orig_word))
+        }
+    }
+}
+
 impl Match {
     /// Formats the referenced token into the string(s) to use in a suggestion.
     /// Mirrors `MatchState.toFinalString`. Returns possibly multiple forms
@@ -219,6 +333,80 @@ impl Match {
         }
 
         if let Some(postag) = &self.postag {
+            // EnglishSynthesizer's special determiner tags
+            match postag {
+                PosTagSelector::Exact(tag) if tag == "+DT" => {
+                    let word = forms.first().cloned().unwrap_or_default();
+                    return vec![
+                        avsan::suggest_a_or_an(&word),
+                        format!("the {}", avsan::lowercase_first_pub(&word)),
+                    ];
+                }
+                PosTagSelector::Exact(tag) if tag == "+INDT" => {
+                    let word = forms.first().cloned().unwrap_or_default();
+                    return vec![avsan::suggest_a_or_an(&word)];
+                }
+                PosTagSelector::Regex { raw, .. } if raw.ends_with("\\+DT") => {
+                    if let Some(synth) = synth {
+                        let target = raw.trim_end_matches("\\+DT").to_string();
+                        let re = crate::utils::regex::Regex::new(target);
+                        let mut out = Vec::new();
+                        let readings: Vec<String> = graph
+                            .by_id(self.id)
+                            .tokens(sentence)
+                            .flat_map(|token| {
+                                token
+                                    .word()
+                                    .tags()
+                                    .iter()
+                                    .map(|tag| tag.lemma().as_str().to_string())
+                            })
+                            .collect();
+                        for lemma in readings {
+                            for form in synth.synthesize_regex(&lemma, &re) {
+                                let prefixed = format!("the {}", form);
+                                if !out.contains(&prefixed) {
+                                    out.push(prefixed);
+                                }
+                            }
+                        }
+                        if !out.is_empty() {
+                            return out;
+                        }
+                    }
+                }
+                PosTagSelector::Regex { raw, .. } if raw.ends_with("\\+INDT") => {
+                    if let Some(synth) = synth {
+                        let target = raw.trim_end_matches("\\+INDT").to_string();
+                        let re = crate::utils::regex::Regex::new(target);
+                        let mut out = Vec::new();
+                        let readings: Vec<String> = graph
+                            .by_id(self.id)
+                            .tokens(sentence)
+                            .flat_map(|token| {
+                                token
+                                    .word()
+                                    .tags()
+                                    .iter()
+                                    .map(|tag| tag.lemma().as_str().to_string())
+                            })
+                            .collect();
+                        for lemma in readings {
+                            for form in synth.synthesize_regex(&lemma, &re) {
+                                let prefixed = avsan::suggest_a_or_an(&form);
+                                if !out.contains(&prefixed) {
+                                    out.push(prefixed);
+                                }
+                            }
+                        }
+                        if !out.is_empty() {
+                            return out;
+                        }
+                    }
+                }
+                _ => {}
+            }
+
             if let Some(synth) = synth {
                 // the POS tags of the matched token's (real) readings
                 let pos_tags: Vec<String> = graph

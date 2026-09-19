@@ -152,43 +152,92 @@ All languages are built from a LanguageTool 6.5 desktop distribution with
 Japanese/Chinese need LT's specialized tokenizers; `da`/`km`/`crh` suffer from incomplete
 tagger dictionaries in the LT distribution itself.
 
-| lang | runnable | passing | lang | runnable | passing |
-|------|----------|---------|------|----------|---------|
-| ar   | 961      | 822     | km   | 44       | 11      |
-| ast  | 71       | 69      | lt   | 4        | 4       |
-| be   | 516      | 506     | ml   | 18       | 18      |
-| br   | 661      | 475     | nl   | 1516     | 1471    |
-| ca   | 13846    | 10227   | pl   | 1778     | 1460    |
-| crh  | 93       | 17      | pt   | 1832     | 895     |
-| da   | 78       | 61      | ro   | 1167     | 1116    |
-| de   | 5400     | 5162    | ru   | 1147     | 975     |
-| de-DE-x-simple | 92 | 40   | sk   | 206      | 184     |
-| el   | 98       | 95      | sl   | 85       | 82      |
-| en   | 5572     | 4066    | sr   | 45       | 44      |
-| eo   | 415      | 126     | sv   | 31       | 29      |
-| es   | 1159     | 896     | ta   | 210      | 210     |
-| fa   | 764      | 557     | tl   | 44       | 37      |
-| fr   | 4533     | 3018    | uk   | 10902    | 10672   |
-| ga   | 3566     | 3292    | zh   | 1863     | 1207    |
-| gl   | 220      | 146     | it   | 129      | 124     |
-| ja   | 735      | 702     |      |          |         |
+| lang           | runnable   | passing   | lang   | runnable   | passing   |
+|----------------|------------|-----------|--------|------------|-----------|
+| ar             | 961        | 822       | km     | 44         | 11        |
+| ast            | 71         | 69        | lt     | 4          | 4         |
+| be             | 516        | 506       | ml     | 18         | 18        |
+| br             | 661        | 476       | nl     | 1544       | 1492      |
+| ca             | 14009      | 10287     | pl     | 1778       | 1460      |
+| crh            | 93         | 17        | pt     | 1877       | 907       |
+| da             | 78         | 61        | ro     | 1167       | 1116      |
+| de             | 5467       | 5189      | ru     | 1169       | 983       |
+| de-DE-x-simple | 92         | 40        | sk     | 206        | 184       |
+| el             | 98         | 95        | sl     | 85         | 82        |
+| en             | 5702       | 4144      | sr     | 45         | 44        |
+| eo             | 416        | 127       | sv     | 31         | 29        |
+| es             | 1732       | 1205      | ta     | 210        | 210       |
+| fa             | 764        | 557       | tl     | 44         | 37        |
+| fr             | 4700       | 3073      | uk     | 10903      | 10673     |
+| ga             | 3566       | 3292      | zh     | 1863       | 1520      |
+| gl             | 220        | 146       | it     | 129        | 124       |
+| ja             | 735        | 702       |        |            |           |
 
-Totals: ~51,000 runnable rules, ~42,200 passing their embedded LanguageTool
-examples (~83%). Highlights: uk 97.8%, be 98.1%, nl 97.1%, sr 97.8%, de 95.6%,
-ja 95.5% (lindera/ipadic), ro 95.6%, ta 100%, ga 92.3%, ru 85%, ar 85.5%.
+Totals: ~53,000 runnable rules, ~43,600 passing their embedded LanguageTool
+examples (~82%). Highlights: uk 97.9%, be 98.1%, nl 96.6%, sr 97.8%, de 94.9%,
+ja 95.5% (lindera/ipadic), ro 95.6%, ta 100%, ga 92.3%, zh 81.6%, ru 84%,
+ar 85.5%, es 69.6%.
+
+### Live comparison against the LanguageTool HTTP server
+
+`build/compare_server.py` sends each language's embedded example sentences to a
+local instance of the official LanguageTool server (`HTTPServer` from the LT 6.5
+distribution) and to nlprule, and compares the rule IDs that fire per sentence:
+
+| lang | sentences | agreed | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
+|------|-----------|--------|--------------|---------|--------------------|----------------|---------|
+| en   | 60        | 31     | 0            | 10      | 1.00               | 0.76           | 0.83    |
+| de   | 60        | 14     | 1            | 5       | 0.93               | 0.74           | 0.92    |
+| fr   | 60        | 32     | 7            | 22      | 0.82               | 0.59           | 0.65    |
+| ca   | 60        | 16     | 14           | 9       | 0.53               | 0.64           | 0.76    |
+| es   | 60        | 35     | 7            | 12      | 0.83               | 0.74           | 0.81    |
+| it   | 40        | 15     | 0            | 11      | 1.00               | 0.58           | 0.73    |
+| ru   | 40        | 22     | 1            | 12      | 0.96               | 0.65           | 0.73    |
+| pt   | 40        | 11     | 0            | 12      | 1.00               | 0.48           | 0.70    |
+| pl   | 40        | 7      | 0            | 40      | 1.00               | 0.15           | 0.13    |
+| ro   | 40        | 19     | 1            | 19      | 0.95               | 0.50           | 0.53    |
+| br   | 30        | 0      | 2            | 0       | 0.00               | 1.00           | 0.93    |
+| uk   | 30        | 16     | 0            | 0       | 1.00               | 1.00           | 1.00    |
+
+nlprule fires almost no rule that LT does not fire (precision 0.93-1.00 for most
+languages). The recall gap is dominated by rules that are pure Java classes in
+LT and have no XML representation (spellcheckers, `pl`'s stemmer-based rules,
+`en`'s chunker-based rules), which are out of scope of the XML conversion; plus
+the deep linguistic filters listed below. `uk` matches the server 100%.
 
 Language-specific notes:
 - `ja` uses lindera with the ipadic dictionary (the same dictionary data LT uses
   via Sen/Gosen); enable the `ja` cargo feature
-- `zh` uses jieba segmentation (`zh` feature); LT uses HanLP whose core
-  dictionary is not freely extractable, so vocabulary-dependent rules differ
+- `zh` uses jieba segmentation (`zh` feature) loaded with HanLP's own
+  dictionaries (the mini CoreNatureDictionary + CustomDictionary, recovered
+  from the double-array tries inside `hanlp.jar` — see
+  `nlprule/configs/zh/hanlp_dict.txt`), so segmentation matches LT's HanLP
+  setup closely (81.6% of examples pass; remaining gaps are HanLP's n-gram
+  disambiguation and unknown-word heuristics)
 - SimpleReplaceRule data tables (`replace*.txt`) are converted to XML rules
   automatically; tables larger than 10k lines are skipped (nl's 66k-line table
   does not fit the per-rule model)
 - `sr` rules come from LT master (ekavian variant) plus its replace tables
 - `da`/`km`/`crh`/`eo`/`fa` have incomplete tagger data in LT itself
-- Filters implemented at runtime: UnderlineSpaces, ApostropheType,
-  RegexAntiPattern, AdaptSuggestions, *SuppressMisspelledSuggestions
+- Java `RuleFilter` classes ported to runtime filters
+  (`nlprule/src/rule/filter_java.rs`, data in `filter_data.rs`): the whole date
+  family (DateCheck/FutureDate/NewYear/YMD/DMY/RecentYear/DateRange/... in 14
+  languages), MultitokenSpeller (+ per-language word lists),
+  *SuppressMisspelledSuggestions, FindSuggestions (en/fr/es/ca, with
+  morfologik's frequency-ranked, diacritics-insensitive suggestion order),
+  AdvancedSynthesizer, PartialPosTag (ru/ga/en), AddCommas, OrdinalSuffix,
+  CompoundCheck, nl CompoundFilter, INN, DecadeSpelling, UppercaseNounReading,
+  ConvertToSentenceCase, ConfusionCheck (es/pt), DiacriticsCheck (ca),
+  RomanNumeral, RegularIrregularParticiple, ValidWord,
+  RemoveUnknownCompounds, WhitespaceCheck, plus the English `+DT`/`+INDT`
+  determiner synthesis of `EnglishSynthesizer`
+- Still unported (deep per-language linguistics): ca's pronoun/verb-morphology
+  filters (AdjustPronouns, Oblidarse, Portar*, DonarTemps, AnarA, ...),
+  fr InterrogativeVerb/MakeContractions/SuggestionsFilter/WordWithDeterminer,
+  es/ca/fr PostponedAdjectiveConcordance, pt Enclisis/Proclisis, the
+  NumberInWord/TextToNumber families, de InsertComma/PotentialCompound,
+  en AdverbFilter, ar verb filters, and `en`'s chunker (4.8k chunk references
+  in `grammar.xml` need a port of LT's regex chunker)
 
 With the original LT 5.2-based build directories, English passes 4192/4226 (99.2%) of its
 example tests and German 3799/3903 (97.3%).

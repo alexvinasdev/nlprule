@@ -86,10 +86,26 @@ fn segment_jieba(text: &str) -> Vec<(usize, usize)> {
 }
 
 #[cfg(feature = "zh")]
+/// The jieba instance loaded with HanLP's own dictionaries (the mini
+/// CoreNatureDictionary + CustomDictionary that LanguageTool's Chinese
+/// tokenizer uses), recovered from `hanlp.jar`'s double-array tries.
+/// Using HanLP's vocabulary instead of jieba's default dictionary mirrors
+/// LT's segmentation much more closely.
+#[cfg(feature = "zh")]
+static JIEBA_HANLP: Lazy<jieba_rs::Jieba> = Lazy::new(|| {
+    use jieba_rs::Jieba;
+    let mut jieba = Jieba::empty();
+    let dict = include_str!("../../configs/zh/hanlp_dict.txt");
+    if let Err(e) = jieba.load_dict(&mut dict.as_bytes()) {
+        log::error!("failed to load HanLP dict for jieba: {}", e);
+    }
+    jieba
+});
+
 fn jieba_ranges(text: &str, offset: usize) -> Vec<(usize, usize)> {
     use jieba_rs::Jieba;
 
-    static JIEBA: Lazy<Jieba> = Lazy::new(Jieba::new);
+    static JIEBA: Lazy<Jieba> = Lazy::new(|| JIEBA_HANLP.clone());
 
     // cut without HMM: out-of-vocabulary runs are split per character,
     // mirroring HanLP's unknown-word handling that LT's zh rules expect
@@ -109,7 +125,7 @@ fn jieba_ranges(text: &str, offset: usize) -> Vec<(usize, usize)> {
 fn tag_jieba(text: &str) -> Vec<(String, &'static str)> {
     use jieba_rs::Jieba;
 
-    static JIEBA: Lazy<Jieba> = Lazy::new(Jieba::new);
+    static JIEBA: Lazy<Jieba> = Lazy::new(|| JIEBA_HANLP.clone());
 
     // intern POS tags as leaked strings so they can live for 'static
     // (jieba's tag set is closed but large; leaking avoids a lookup table)
