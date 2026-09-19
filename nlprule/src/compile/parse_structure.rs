@@ -641,6 +641,33 @@ fn parse_tokens(
     Ok(out)
 }
 
+
+fn parse_antipatterns(
+    antipatterns: Option<Vec<structure::Pattern>>,
+    unifications: &Option<Vec<structure::Unification>>,
+    info: &mut BuildInfo,
+) -> Result<Vec<crate::rule::engine::AntiPattern>, Error> {
+    let mut out = Vec::new();
+    for pattern in antipatterns.into_iter().flatten() {
+        let unify_filters = parse_features(&pattern, unifications, info);
+        let (composition, ..) = parse_pattern(pattern.clone(), info)?;
+        let unify_mask: Vec<_> = composition.parts.iter().map(|part| part.unify).collect();
+        let unification = if unify_filters.is_empty() {
+            None
+        } else {
+            Some(crate::rule::Unification {
+                mask: unify_mask,
+                filters: unify_filters,
+            })
+        };
+        out.push(crate::rule::engine::AntiPattern {
+            composition,
+            unification,
+        });
+    }
+    Ok(out)
+}
+
 fn parse_pattern(
     pattern: structure::Pattern,
     info: &mut BuildInfo,
@@ -766,23 +793,8 @@ impl Rule {
             )),
             (Some(pattern), None) => {
                 let (composition, start, end) = parse_pattern(pattern.clone(), info)?;
-                let antipatterns = if let Some(antipatterns) = data.antipatterns {
-                    antipatterns
-                        .into_iter()
-                        .map(|pattern| parse_pattern(pattern, info).map(|x| x.0))
-                        .collect::<Result<Vec<_>, Error>>()?
-                } else {
-                    Vec::new()
-                };
-
-                if antipatterns
-                    .iter()
-                    .any(|pattern| pattern.parts.iter().any(|x| x.unify.is_some()))
-                {
-                    return Err(Error::Unimplemented(
-                        "`unify` in antipattern is not supported.".into(),
-                    ));
-                }
+                let antipatterns =
+                    parse_antipatterns(data.antipatterns, &data.unifications, info)?;
 
                 Ok((
                     Engine::Token(TokenEngine {
@@ -1152,6 +1164,44 @@ fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result
         x if x.ends_with("SuppressMisspelledSuggestionsFilter") => {
             make_java(JClass::SuppressMisspelledSuggestions, &[])
         }
+        "SuggestionsFilter" if package == "fr" => {
+            make_java(JClass::SuggestionsRemove, &["RemoveSuggestionsRegexp"])
+        }
+        "MakeContractionsFilter" => make_java(JClass::MakeContractions, &[]),
+        x if x.ends_with("NumberInWordFilter") => make_java(JClass::NumberInWord, &[]),
+        "TextToNumberFilter" => match package.as_str() {
+            "es" => make_java(JClass::TextToNumber { lang: crate::rule::filter_java::TextNumberLang::Es }, &[]),
+            "ca" => make_java(JClass::TextToNumber { lang: crate::rule::filter_java::TextNumberLang::Ca }, &[]),
+            _ => {
+                return Err(Error::Unimplemented(
+                    "filter TextToNumberFilter is not implemented.".into(),
+                ))
+            }
+        },
+        "InterrogativeVerbFilter" => make_java(JClass::InterrogativeVerb, &[]),
+        "WordWithDeterminerFilter" => make_java(JClass::WordWithDeterminer, &[]),
+        "PortugueseEnclisisFilter" => make_java(JClass::EnclisisPt, &[]),
+        "PortugueseProclisisFilter" => make_java(JClass::ProclisisPt, &[]),
+        "SynthesizeWithDeterminerFilter" => {
+            make_java(JClass::SynthesizeWithDeterminer, &["lemmaSelect"])
+        }
+        "ConvertToGenderAndNumberFilter" => {
+            make_java(JClass::ConvertToGenderAndNumber, &["lemmaSelect"])
+        }
+        "PossessiusRedundantsFilter" => make_java(JClass::PossessiusRedundants, &[]),
+        "InsertCommaFilter" if package == "de" => make_java(JClass::InsertCommaDe, &[]),
+        "PotentialCompoundFilter" => make_java(JClass::PotentialCompoundDe, &[]),
+        "PostponedAdjectiveConcordanceFilter" => match package.as_str() {
+            "fr" => make_java(JClass::PostponedAdjective { lang: crate::rule::filter_java::PostponedAdjLang::Fr }, &[]),
+            "es" => make_java(JClass::PostponedAdjective { lang: crate::rule::filter_java::PostponedAdjLang::Es }, &[]),
+            "ca" => make_java(JClass::PostponedAdjective { lang: crate::rule::filter_java::PostponedAdjLang::Ca }, &[]),
+            _ => {
+                return Err(Error::Unimplemented(format!(
+                    "filter {} is not implemented.",
+                    "PostponedAdjectiveConcordanceFilter"
+                )))
+            }
+        },
         x => Err(Error::Unimplemented(format!("filter {} is not implemented.", x))),
     }
 }
@@ -1234,23 +1284,7 @@ impl DisambiguationRule {
         let unify_filters = parse_features(&data.pattern, &data.unifications, info);
         let unify_mask: Vec<_> = composition.parts.iter().map(|part| part.unify).collect();
 
-        let antipatterns = if let Some(antipatterns) = data.antipatterns {
-            antipatterns
-                .into_iter()
-                .map(|pattern| parse_pattern(pattern, info).map(|x| x.0))
-                .collect::<Result<Vec<_>, Error>>()?
-        } else {
-            Vec::new()
-        };
-
-        if antipatterns
-            .iter()
-            .any(|pattern| pattern.parts.iter().any(|x| x.unify.is_some()))
-        {
-            return Err(Error::Unimplemented(
-                "`unify` in antipattern is not supported.".into(),
-            ));
-        }
+        let antipatterns = parse_antipatterns(data.antipatterns, &data.unifications, info)?;
 
         let engine = Engine::Token(TokenEngine {
             composition,

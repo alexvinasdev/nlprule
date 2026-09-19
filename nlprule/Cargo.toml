@@ -120,3 +120,7 @@ required-features = ["bin"]
 [[bin]]
 name = "check_server"
 required-features = ["bin"]
+
+[[bin]]
+name = "opennlp_to_chunker"
+required-features = ["bin"]

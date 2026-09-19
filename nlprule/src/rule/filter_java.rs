@@ -99,6 +99,37 @@ pub enum JClass {
     RegularIrregularParticiple,
     ValidWord,
     RemoveUnknownCompounds,
+    SuggestionsRemove,
+    MakeContractions,
+    NumberInWord,
+    TextToNumber {
+        lang: TextNumberLang,
+    },
+    InterrogativeVerb,
+    WordWithDeterminer,
+    EnclisisPt,
+    ProclisisPt,
+    SynthesizeWithDeterminer,
+    ConvertToGenderAndNumber,
+    PossessiusRedundants,
+    InsertCommaDe,
+    PotentialCompoundDe,
+    PostponedAdjective {
+        lang: PostponedAdjLang,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextNumberLang {
+    Es,
+    Ca,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostponedAdjLang {
+    Fr,
+    Es,
+    Ca,
 }
 
 /// Everything a Java filter needs at runtime.
@@ -203,6 +234,29 @@ impl<'a, 't> FilterCtx<'a, 't> {
         let start = self.token_span_at_matched(n)?;
         let end = self.token_span_at_matched(m)?;
         Some(Span::from_positions(start.start(), end.end()))
+    }
+
+    /// LT's `RuleFilter.getPosition`: `marker`/`marker+N` or a plain 1-based
+    /// index, over the matched tokens. Returns the 1-based index.
+    fn get_position(&self, spec: &str) -> Option<usize> {
+        if spec.starts_with("marker") {
+            let mut i = 0;
+            while i < self.matched_tokens.len() {
+                let token = self.sentence.index(self.matched_tokens[i]);
+                if token.span().char().start >= self.span.char().start {
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+            if spec.len() > "marker".len() {
+                let off: usize = spec.trim_start_matches("marker").parse().ok()?;
+                i += off;
+            }
+            Some(i)
+        } else {
+            spec.parse().ok()
+        }
     }
 
     fn sentence_tokens(&self) -> Vec<&Token<'_>> {
@@ -473,6 +527,26 @@ impl JClass {
                 } else {
                     keep(ctx, replacements)
                 }
+            }
+            JClass::SuggestionsRemove => suggestions_remove(ctx, replacements),
+            JClass::MakeContractions => make_contractions(ctx, replacements),
+            JClass::NumberInWord => number_in_word(ctx, replacements),
+            JClass::TextToNumber { lang } => text_to_number(ctx, *lang, replacements),
+            JClass::InterrogativeVerb => interrogative_verb(ctx, replacements),
+            JClass::WordWithDeterminer => word_with_determiner(ctx, replacements),
+            JClass::EnclisisPt => enclisis_pt(ctx, replacements),
+            JClass::ProclisisPt => proclisis_pt(ctx, replacements),
+            JClass::SynthesizeWithDeterminer => {
+                synthesize_with_determiner(ctx, replacements)
+            }
+            JClass::ConvertToGenderAndNumber => {
+                convert_to_gender_and_number(ctx, replacements)
+            }
+            JClass::PossessiusRedundants => possessius_redundants(ctx, replacements),
+            JClass::InsertCommaDe => insert_comma_de(ctx, replacements),
+            JClass::PotentialCompoundDe => potential_compound_de(ctx, replacements),
+            JClass::PostponedAdjective { lang } => {
+                postponed_adjective(ctx, *lang, replacements)
             }
             JClass::RemoveUnknownCompounds => {
                 let compound = format!(
@@ -3125,4 +3199,1970 @@ fn regular_irregular_participle(
         .collect();
 
     keep(ctx, out)
+}
+
+// ---------------------------------------------------------------------------
+// wave 2: fr / pt / number families / de
+// ---------------------------------------------------------------------------
+
+fn suggestions_remove(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let regex = ctx.regex_arg("RemoveSuggestionsRegexp")?;
+    let out: Vec<String> = replacements
+        .into_iter()
+        .filter(|r| !matches_full(&regex, r))
+        .collect();
+    keep(ctx, out)
+}
+
+fn make_contractions(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    fn fix(s: &str) -> String {
+        let s = word_replace(s, "de le", "du");
+        let s = word_replace(&s, "à le", "au");
+        let s = word_replace(&s, "de les", "des");
+        word_replace(&s, "à les", "aux")
+    }
+    fn word_replace(text: &str, from: &str, to: &str) -> String {
+        // case-insensitive \bfrom\b -> to, preserving nothing else
+        let lower = text.to_lowercase();
+        let mut out = String::with_capacity(text.len());
+        let chars: Vec<char> = text.chars().collect();
+        let lchars: Vec<char> = lower.chars().collect();
+        let from: Vec<char> = from.chars().collect();
+        let to: Vec<char> = to.chars().collect();
+        let n = chars.len();
+        let m = from.len();
+        let mut i = 0;
+        while i < n {
+            let at_boundary_start = i == 0 || !lchars[i - 1].is_alphanumeric();
+            if at_boundary_start && i + m <= n && lchars[i..i + m] == from[..] {
+                let at_boundary_end = i + m == n || !lchars[i + m].is_alphanumeric();
+                if at_boundary_end {
+                    // keep the case of the first char if it was upper
+                    let mut to_val: Vec<char> = to.clone();
+                    if chars[i].is_uppercase() {
+                        if let Some(c) = to_val.first_mut() {
+                            *c = c.to_uppercase().next().unwrap_or(*c);
+                        }
+                    }
+                    out.extend(to_val);
+                    i += m;
+                    continue;
+                }
+            }
+            out.push(chars[i]);
+            i += 1;
+        }
+        out
+    }
+    let out: Vec<String> = replacements.into_iter().map(|r| fix(&r)).collect();
+    keep(ctx, out)
+}
+
+fn number_in_word(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let word = ctx.arg("word")?;
+    let replacing_zero_o = word.replace('0', "o");
+    let without_digits: String = word.chars().filter(|c| !c.is_ascii_digit()).collect();
+
+    let mut out = Vec::new();
+    if is_known_word_ctx(ctx, &replacing_zero_o) && word != replacing_zero_o {
+        out.push(replacing_zero_o);
+    }
+    if is_known_word_ctx(ctx, &without_digits) {
+        out.push(without_digits.clone());
+    }
+    if out.is_empty() {
+        if let Some(speller) = ctx.data.speller.as_ref() {
+            out = speller.find_similar(&without_digits, 2);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        keep(ctx, out)
+    }
+}
+
+fn text_to_number(
+    ctx: &mut FilterCtx,
+    lang: TextNumberLang,
+    replacements: Vec<String>,
+) -> Option<JavaOutcome> {
+    fn table(lang: TextNumberLang) -> (Vec<(&'static str, f32)>, Vec<(&'static str, f32)>) {
+        let numbers = match lang {
+            TextNumberLang::Es => vec![
+                ("cero", 0.0), ("medio", 0.5), ("un", 1.0), ("uno", 1.0), ("una", 1.0),
+                ("dos", 2.0), ("tres", 3.0), ("cuatro", 4.0), ("cinco", 5.0), ("seis", 6.0),
+                ("siete", 7.0), ("ocho", 8.0), ("nueve", 9.0), ("diez", 10.0), ("once", 11.0),
+                ("doce", 12.0), ("trece", 13.0), ("catorce", 14.0), ("quince", 15.0),
+                ("dieciséis", 16.0), ("diecisiete", 17.0), ("dieciocho", 18.0),
+                ("diecinueve", 19.0), ("veinte", 20.0), ("veintiuno", 21.0), ("veintidós", 22.0),
+                ("veintitrés", 23.0), ("veinticuatro", 24.0), ("veinticinco", 25.0),
+                ("veintiséis", 26.0), ("veintisiete", 27.0), ("veintiocho", 28.0),
+                ("veintinueve", 29.0), ("treinta", 30.0), ("cuarenta", 40.0), ("cincuenta", 50.0),
+                ("sesenta", 60.0), ("setenta", 70.0), ("ochenta", 80.0), ("noventa", 90.0),
+                ("cien", 100.0), ("ciento", 100.0), ("doscientos", 200.0), ("trescientos", 300.0),
+                ("cuatrocientos", 400.0), ("quinientos", 500.0), ("seiscientos", 600.0),
+                ("setecientos", 700.0), ("ochocientos", 800.0), ("novecientos", 900.0),
+                ("doscientas", 200.0), ("trescientas", 300.0), ("cuatrocientas", 400.0),
+                ("quinientas", 500.0), ("seiscientas", 600.0), ("setecientas", 700.0),
+                ("ochocientas", 800.0), ("novecientas", 900.0),
+            ],
+            TextNumberLang::Ca => vec![
+                ("zero", 0.0), ("mig", 0.5), ("un", 1.0), ("u", 1.0), ("una", 1.0), ("dos", 2.0),
+                ("dues", 2.0), ("tres", 3.0), ("quatre", 4.0), ("cinc", 5.0), ("sis", 6.0),
+                ("set", 7.0), ("vuit", 8.0), ("huit", 8.0), ("nou", 9.0), ("deu", 10.0),
+                ("onze", 11.0), ("dotze", 12.0), ("tretze", 13.0), ("catorze", 14.0),
+                ("quinze", 15.0), ("setze", 16.0), ("disset", 17.0), ("desset", 17.0),
+                ("dèsset", 17.0), ("divuit", 18.0), ("devuit", 18.0), ("díhuit", 18.0),
+                ("dinou", 19.0), ("denou", 19.0), ("dènou", 19.0), ("dèneu", 19.0),
+                ("vint", 20.0), ("trenta", 30.0), ("quaranta", 40.0), ("cinquanta", 50.0),
+                ("seixanta", 60.0), ("setanta", 70.0), ("vuitanta", 80.0), ("huitanta", 80.0),
+                ("noranta", 90.0),
+            ],
+        };
+        let multipliers = match lang {
+            TextNumberLang::Es => vec![
+                ("mil", 1000.0), ("millón", 1_000_000.0), ("millones", 1_000_000.0),
+                ("billón", 10.0e12), ("billones", 10.0e12),
+                ("trillón", 10.0e18), ("trillones", 10.0e18),
+            ],
+            TextNumberLang::Ca => vec![
+                ("cent", 100.0), ("cents", 100.0), ("mil", 1000.0),
+                ("milió", 1_000_000.0), ("milions", 1_000_000.0),
+                ("bilió", 10.0e12), ("bilions", 10.0e12),
+                ("trilió", 10.0e18), ("trilions", 10.0e18),
+            ],
+        };
+        (numbers, multipliers)
+    }
+
+    let (numbers, multipliers) = table(lang);
+    let lookup = |w: &str| -> Option<f32> {
+        numbers
+            .iter()
+            .find(|(k, _)| *k == w)
+            .map(|(_, v)| *v)
+            .or_else(|| multipliers.iter().find(|(k, _)| *k == w).map(|(_, v)| *v))
+    };
+    let is_multiplier = |w: &str| multipliers.iter().any(|(k, _)| *k == w);
+    let is_comma = |w: &str| matches!(lang, TextNumberLang::Es) && (w == "comma" || w == "coma");
+
+    let tokens = ctx.matched_token_refs();
+    let mut total = 0f32;
+    let mut current = 0f32;
+    let mut total_decimal = 0f32;
+    let mut current_decimal = 0f32;
+    let mut added_zeros = 0u32;
+    let mut percentage = false;
+    let mut decimal = false;
+
+    for (idx, token) in tokens.iter().enumerate() {
+        let form = token.word().as_str().to_lowercase();
+        if idx > 0 {
+            let prev = tokens[idx - 1].word().as_str().to_lowercase();
+            let percent_word = matches!(lang, TextNumberLang::Es)
+                && form == "ciento"
+                && prev == "por";
+            let percent_word_ca = matches!(lang, TextNumberLang::Ca)
+                && form == "cent"
+                && prev == "per";
+            if percent_word || percent_word_ca {
+                percentage = true;
+                break;
+            }
+        }
+        if is_comma(&form) {
+            decimal = true;
+            continue;
+        }
+        let sub_forms: Vec<&str> = if matches!(lang, TextNumberLang::Ca) {
+            form.split('-').collect()
+        } else {
+            vec![form.as_str()]
+        };
+        for sub in sub_forms {
+            if let Some(v) = lookup(sub) {
+                if !decimal {
+                    if is_multiplier(sub) {
+                        if current == 0.0 {
+                            current = 1.0;
+                        }
+                        total += current * v;
+                        current = 0.0;
+                    } else {
+                        current += v;
+                    }
+                } else if !is_multiplier(sub) {
+                    let zeros = format_float(v, false).len() as u32;
+                    current_decimal += v / 10f32.powi((added_zeros + zeros) as i32);
+                    added_zeros += 1;
+                }
+            }
+        }
+    }
+    total += current;
+    total_decimal += current_decimal;
+    total = total + current_decimal;
+
+    let sugg = format_float(total, percentage);
+    let sugg = if matches!(lang, TextNumberLang::Ca) {
+        sugg.replace('.', ",")
+    } else {
+        sugg
+    };
+
+    let mut out = replacements;
+    out.push(sugg);
+    keep(ctx, out)
+}
+
+/// Java `String.format("%s", float)` close enough: integers without decimals.
+fn format_float(d: f32, percentage: bool) -> String {
+    let mut result = if d == d.trunc() && d.abs() < 1e15 {
+        format!("{}", d.trunc() as i64)
+    } else {
+        format!("{}", d)
+    };
+    if percentage {
+        result.push('\u{202F}');
+        result.push('%');
+    }
+    result
+}
+
+fn interrogative_verb(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let pronoun_pos: usize = ctx.arg("PronounFrom")?.parse().ok()?;
+    let verb_pos: usize = ctx.arg("VerbFrom")?.parse().ok()?;
+    let tokens = ctx.matched_token_refs();
+    let pronoun = tokens.get(pronoun_pos.checked_sub(1)?)?;
+    let verb = tokens.get(verb_pos.checked_sub(1)?)?;
+
+    let pronoun_tags: Vec<String> = pronoun
+        .word()
+        .tags()
+        .iter()
+        .map(|d| d.pos().as_str().to_string())
+        .collect();
+    let pmatches = |re: &str| {
+        let regex = Regex::new(re.to_string());
+        pronoun_tags.iter().any(|t| matches_full(&regex, t))
+    };
+
+    let desired: Option<&str> = if pmatches("R pers obj 2 p") {
+        Some("V.* (imp) [23] [sp]|V .*(ind|cond).* 2 p")
+    } else if pmatches("R pers obj 1 p") {
+        Some("V.* (imp) .*|V .*(ind|cond).* 1 p")
+    } else if pmatches("R pers obj.*") {
+        Some("V.* (imp) .*")
+    } else if pmatches(".* 1 s") {
+        // extra participle suggestions below
+        None
+    } else if pmatches(".* 2 s") {
+        Some("V .*(ind|cond).* 2 s")
+    } else if pmatches(".* 3( [mfe])? s") {
+        Some("V .*(ind|cond).* 3 s")
+    } else if pmatches(".* 1 p") {
+        Some("V .*(ind|cond).* 1 p")
+    } else if pmatches(".* 2 p") {
+        Some("V .*(ind|cond).* 2 p")
+    } else if pmatches(".* 3( [mf])? p") {
+        Some("V .*(ind|cond).* 3 p")
+    } else {
+        None
+    };
+
+    let pronoun_text = pronoun.word().as_str();
+    let separator = if pronoun_text.starts_with('-') { "" } else { "-" };
+    let mut out: Vec<String> = Vec::new();
+
+    if pmatches(".* 1 s") {
+        // extra participle suggestions: "trompé-je", "trompè-je"
+        if let Some(synth) = ctx.synth {
+            let reading = verb
+                .word()
+                .tags()
+                .iter()
+                .find(|d| matches_full(&Regex::new("V .*".into()), d.pos().as_str()));
+            if let Some(data) = reading {
+                let re = Regex::new(r"V ppa [me] sp?".to_string());
+                let participles = synth.synthesize_regex(data.lemma().as_str(), &re);
+                if let Some(first) = participles.first() {
+                    if first.ends_with('é') {
+                        out.push(format!("{}{}{}", first, separator, pronoun_text));
+                        let stem: String = first.chars().take(first.chars().count() - 1).collect();
+                        out.push(format!("{}{}{}{}", stem, separator, "è", pronoun_text));
+                    }
+                }
+            }
+        }
+    } else if let Some(desired) = desired {
+        if let Some(speller) = ctx.data.speller.as_ref() {
+            let verb_text = verb.word().as_str();
+            let candidates: Vec<String> =
+                speller.find_similar_ignoring_diacritics(verb_text, 1);
+            let desired_re = Regex::new(desired.to_string());
+            for candidate in candidates {
+                let tags: Vec<String> = ctx
+                    .tagger
+                    .get_tags_with_options(&candidate, Some(false), Some(false))
+                    .map(|d| d.pos().as_str().to_string())
+                    .collect();
+                if tags.iter().any(|t| matches_full(&desired_re, t)) {
+                    let mut sugg = format!("{}{}{}", candidate, separator, pronoun_text);
+                    if sugg.eq_ignore_ascii_case("peux-je") {
+                        sugg = preserve_case("puis-je", &sugg);
+                    }
+                    if sugg.ends_with("e-je") {
+                        let stem = &sugg[..sugg.len() - 4];
+                        out.push(format!("{}é-je", stem));
+                        out.push(format!("{}è-je", stem));
+                    } else if !out.contains(&sugg) {
+                        out.push(sugg);
+                    }
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        keep(ctx, replacements)
+    } else {
+        keep(ctx, out)
+    }
+}
+
+fn word_with_determiner(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let word_from: usize = ctx.arg("wordFrom")?.parse().ok()?;
+    let determiner_from: usize = ctx.arg("determinerFrom")?.parse().ok()?;
+    let tokens = ctx.matched_token_refs();
+    let det_token = tokens.get(determiner_from.checked_sub(1)?)?;
+    let word_token = tokens.get(word_from.checked_sub(1)?)?;
+
+    let det_re = Regex::new(r"(P.)?D .*|J .*|V.* ppa .*".to_string());
+    let word_re = Regex::new(r"[ZNJ] .*|V.* ppa .*".to_string());
+
+    let pick = |token: &Token, re: &Regex| -> Option<(String, String)> {
+        token
+            .word()
+            .tags()
+            .iter()
+            .find(|d| matches_full(re, d.pos().as_str()))
+            .map(|d| (d.lemma().as_str().to_string(), d.pos().as_str().to_string()))
+    };
+
+    let det = pick(det_token, &det_re)?;
+    let word = pick(word_token, &word_re)?;
+    let synth = ctx.synth?;
+
+    let is_noun = word.1.starts_with('N') || word.1.starts_with('Z');
+    let is_adj = word.1.starts_with('J');
+    let prefix = if is_noun && !is_adj {
+        "[NZ] "
+    } else if !is_noun && is_adj {
+        "J "
+    } else {
+        "[ZNJ] "
+    };
+
+    const GENDER_NUMBER: [&str; 4] = ["([me]) (s|sp)", "([fe]) (s|sp)", "([me]) (p|sp)", "([fe]) (p|sp)"];
+    let determiner_prefix = "((P.)?D |J |V.* ppa )";
+
+    let is_det_cap = is_capitalized(det_token.word().as_str());
+    let is_word_cap = is_capitalized(word_token.word().as_str());
+    let is_det_upper =
+        is_all_uppercase(det_token.word().as_str()) && det_token.word().as_str() != "L'";
+    let is_word_upper = is_all_uppercase(word_token.word().as_str());
+
+    const EXCEPTIONS: [&str; 4] = ["bels", "fols", "mols", "nouvels"];
+
+    let mut out: Vec<String> = Vec::new();
+    for gn in GENDER_NUMBER {
+        let det_target = Regex::new(format!("{}{}", determiner_prefix, gn).to_string());
+        let word_target = Regex::new(format!("{}{}", prefix, gn).to_string());
+        let mut det_forms = synth.synthesize_regex(&det.0, &det_target);
+        let mut word_forms = synth.synthesize_regex(&word.0, &word_target);
+        if det_forms.is_empty() {
+            let gn_plain = gn.replace(['(', ')', '|'], "");
+            if matches_full(&Regex::new(format!(".+{}", gn).to_string()), &det.1) {
+                det_forms = vec![det_token.word().as_str().to_string()];
+            }
+            let _ = gn_plain;
+        }
+        if word_forms.is_empty()
+            && matches_full(&Regex::new(format!(".+{}", gn).to_string()), &word.1)
+        {
+            word_forms = vec![word_token.word().as_str().to_string()];
+        }
+        for wf in &word_forms {
+            for df in &det_forms {
+                if EXCEPTIONS.contains(&df.as_str()) {
+                    continue;
+                }
+                let mut det_form = df.clone();
+                let mut word_form = wf.clone();
+                if is_det_cap {
+                    det_form = uppercase_first(&det_form);
+                }
+                if is_word_cap {
+                    word_form = uppercase_first(&word_form);
+                }
+                if is_det_upper {
+                    det_form = det_form.to_uppercase();
+                }
+                if is_word_upper {
+                    word_form = word_form.to_uppercase();
+                }
+                let mut r = format!("{} {}", det_form, word_form);
+                r = r.replace("' ", "'");
+                if !out.contains(&r) {
+                    if r.ends_with(word_token.word().as_str()) {
+                        out.insert(0, r.clone());
+                    } else {
+                        out.push(r);
+                    }
+                }
+            }
+        }
+    }
+
+    // LT additionally validates each suggestion against other rules here
+    // (suggestionHasNoErrors); we keep all synthesized forms.
+    let mut all = out;
+    all.extend(replacements);
+    keep(ctx, all)
+}
+
+fn enclisis_pt(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let verb_pos: usize = ctx.arg("verbPos")?.parse().ok()?;
+    let pronoun_pos: usize = ctx.arg("pronounPos")?.parse().ok()?;
+    let convert_accusative = ctx.arg("convertToAccusative").as_deref() == Some("true");
+
+    let tokens = ctx.matched_token_refs();
+    // LT indexes patternTokens directly (0-based) here
+    let verb = tokens.get(verb_pos)?;
+    let pronoun = tokens.get(pronoun_pos)?;
+    let verb_text = verb.word().as_str();
+
+    let mut pronoun_tags: Vec<String> = Vec::new();
+    for data in pronoun.word().tags() {
+        if pronoun.word().as_str() == "nos" {
+            pronoun_tags.push("PP1CPO00".to_string());
+            if verb_text.ends_with('m')
+                || verb_text.ends_with("ão")
+                || verb_text.ends_with("õe")
+            {
+                pronoun_tags.push("PP3MPA00".to_string());
+            }
+            break;
+        }
+        let pos = data.pos().as_str();
+        if pos.starts_with("PP") {
+            let pos = if convert_accusative && pos.ends_with("N00") {
+                format!("{}A00", &pos[..pos.len() - 3])
+            } else {
+                pos.to_string()
+            };
+            pronoun_tags.push(pos);
+        }
+    }
+    if pronoun_tags.is_empty() {
+        return None;
+    }
+
+    let synth = ctx.synth?;
+    let is_title = is_capitalized(verb_text);
+    let is_all_caps = is_all_uppercase(verb_text);
+    let mut suggestions: Vec<String> = Vec::new();
+    for data in verb.word().tags() {
+        let pos = data.pos().as_str();
+        if pos.starts_with('V') {
+            for pronoun_tag in &pronoun_tags {
+                let key = format!("{}:{}", pos, pronoun_tag);
+                for mut form in synth.lookup(data.lemma().as_str(), &key) {
+                    if is_title {
+                        form = uppercase_first(&form);
+                    } else if is_all_caps {
+                        form = form.to_uppercase();
+                    }
+                    if !suggestions.contains(&form) {
+                        suggestions.push(form);
+                    }
+                }
+            }
+            break;
+        }
+    }
+    if suggestions.is_empty() {
+        None
+    } else {
+        keep(ctx, suggestions)
+    }
+    .or_else(|| keep(ctx, replacements))
+}
+
+fn proclisis_pt(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.matched_token_refs();
+    let enclitic = tokens.last()?;
+    let synth = ctx.synth?;
+    let old_token = enclitic.word().as_str();
+    let old_parts: Vec<&str> = old_token.split('-').collect();
+    if old_parts.len() != 2 {
+        return keep(ctx, replacements);
+    }
+    let old_verb = old_parts[0];
+    let old_pronoun = old_parts[1];
+
+    let mut suggestions: Vec<String> = Vec::new();
+    for data in enclitic.word().tags() {
+        let pos = data.pos().as_str();
+        if !pos.starts_with('V') || !pos.contains(':') {
+            continue;
+        }
+        let verb_tag = pos.split(':').next().unwrap_or(pos);
+        let new_verb = synth
+            .lookup(data.lemma().as_str(), verb_tag)
+            .first()
+            .cloned()?;
+        let mut new_pronouns: Vec<String> = match old_pronoun {
+            "lo" | "no" => vec!["o".to_string()],
+            "la" | "na" => vec!["a".to_string()],
+            "los" => vec!["os".to_string()],
+            "las" | "nas" => vec!["as".to_string()],
+            "nos" => {
+                let mut v = vec!["nos".to_string()];
+                if old_verb.ends_with('m')
+                    || old_verb.ends_with("ão")
+                    || old_verb.ends_with("õe")
+                {
+                    v.push("os".to_string());
+                }
+                v
+            }
+            other => vec![other.to_string()],
+        };
+        for pronoun in new_pronouns.drain(..) {
+            let sugg = format!("{} {}", pronoun, new_verb);
+            if !suggestions.contains(&sugg) {
+                suggestions.push(sugg);
+            }
+        }
+    }
+    if suggestions.is_empty() {
+        keep(ctx, replacements)
+    } else {
+        keep(ctx, suggestions)
+    }
+}
+
+fn insert_comma_de(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let has_tag = |word: &str, prefix: &str| -> bool {
+        ctx.tagger
+            .get_tags_with_options(word, Some(false), Some(false))
+            .any(|d| d.pos().as_str().starts_with(prefix))
+    };
+
+    let pattern_token_pos = ctx.pattern_token_pos();
+    let sentence_tokens = ctx.sentence_tokens();
+    let verb_at_1 = sentence_tokens
+        .get(1)
+        .map(|t| {
+            t.word()
+                .tags()
+                .iter()
+                .any(|d| d.pos().as_str().starts_with("ADV:"))
+        })
+        .unwrap_or(false);
+
+    let mut suggestions: Vec<String> = Vec::new();
+    for replacement in &replacements {
+        let parts: Vec<&str> = replacement.split_whitespace().collect();
+        let matches_word = |w: &str, re: &str| matches_full(&Regex::new(re.to_string()), w);
+        if parts.len() == 2 {
+            suggestions.push(format!("{}, {}", parts[0], parts[1]));
+        } else if parts.len() == 3 {
+            let t1 = has_tag(parts[0], "VER:");
+            let t2 = has_tag(parts[1], "PRO:PER:");
+            let t3 = has_tag(parts[2], "VER:");
+            if t1 && t2 {
+                suggestions.push(format!("{}, {} {}", parts[0], parts[1], parts[2]));
+            } else if matches_word(parts[0], "[Ss]agt?")
+                && parts[1] == "mal"
+                && t3
+            {
+                suggestions.push(format!("{} {}, {}", parts[0], parts[1], parts[2]));
+            } else if t1 && has_tag(parts[1], "ADV:") && t3 {
+                suggestions.push(format!("{}, {} {}", parts[0], parts[1], parts[2]));
+            }
+        } else if (4..=7).contains(&parts.len()) {
+            let rest1 = parts[1..].join(" ");
+            if pattern_token_pos <= 2 || (pattern_token_pos == 3 && verb_at_1) {
+                let t1 = has_tag(parts[0], "VER:");
+                if parts.len() == 5
+                    && t1
+                    && has_tag(parts[1], "ART:")
+                    && has_tag(parts[2], "SUB:")
+                    && has_tag(parts[3], "SUB:")
+                    && has_tag(parts[4], "VER:")
+                {
+                    suggestions.push(format!("{} {} {} {},", parts[0], parts[1], parts[2], parts[3]));
+                } else if parts.len() == 4
+                    && ctx.matched_tokens.len() >= 2
+                    && {
+                        let first = ctx.sentence.index(ctx.matched_tokens[0]);
+                        first
+                            .word()
+                            .tags()
+                            .iter()
+                            .any(|d| d.pos().as_str().starts_with("VER:"))
+                    }
+                    && matches_word(
+                        ctx.sentence.index(ctx.matched_tokens[1]).word().as_str(),
+                        "der|die|das|seine|ihre|deine|unsere|meine|folgender|dieser",
+                    )
+                {
+                    suggestions.push(format!("{}, {}", parts[0], rest1));
+                } else if t1 && has_tag(parts[1], "PRO:POS:") && has_tag(parts[2], "SUB:") {
+                    suggestions.push(format!("{}, {}", parts[0], rest1));
+                } else if t1
+                    && has_tag(parts[1], "PRO:PER:")
+                    && has_tag(parts[2], "ADV:INR")
+                {
+                    let rest2 = parts[2..].join(" ");
+                    suggestions.push(format!("{} {}, {}", parts[0], parts[1], rest2));
+                } else if t1 && has_tag(parts[1], "PRO:POS:") && has_tag(parts[2], "ADJ:") {
+                    suggestions.push(format!("{}, {}", parts[0], rest1));
+                } else if matches_word(
+                    parts[0],
+                    "denke|dachte|glaube|schätze|vermute|behaupte",
+                ) && has_tag(parts[1], "PRO:DEM:")
+                    && has_tag(parts[2], "SUB:")
+                {
+                    suggestions.push(format!("{}, {}", parts[0], rest1));
+                } else if pattern_token_pos == 1
+                    && matches_word(parts[1], "bei|für|mit")
+                    && matches_word(parts[2], "[Di]ir|[Dd]ich|[Ee]uer|[Ee]uch")
+                    && has_tag(parts[3], "VER:")
+                {
+                    suggestions.push(format!("{}, {}", parts[0], rest1));
+                }
+            }
+        }
+    }
+    keep(ctx, suggestions)
+}
+
+fn potential_compound_de(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let part1 = ctx.arg("part1")?;
+    let part2 = ctx.arg("part2")?;
+
+    let is_mixed = |s: &str| s.chars().any(char::is_uppercase) && s.chars().any(char::is_lowercase);
+    let part2lowercase = if !is_mixed(&part2) && !is_all_uppercase(&part2) {
+        part2.to_lowercase()
+    } else {
+        part2.clone()
+    };
+    let part2cap = if !is_mixed(&part2) && !is_all_uppercase(&part2) {
+        uppercase_first(&part2.to_lowercase())
+    } else {
+        part2.clone()
+    };
+    let part1cap = if !is_mixed(&part1) && !is_all_uppercase(&part1) {
+        uppercase_first(&part1.to_lowercase())
+    } else {
+        part1.clone()
+    };
+
+    let joined = format!("{}{}", part1cap, part2lowercase);
+    let hyphenated = format!("{}-{}", part1cap, part2cap);
+
+    let joined_known = ctx
+        .tagger
+        .get_tags_with_options(&joined, Some(false), Some(false))
+        .next()
+        .is_some()
+        || is_known_word_ctx(ctx, &joined);
+
+    let mut out = Vec::new();
+    if !joined_known {
+        // LT asks the spelling rule; a known analyzed word is accepted
+        if joined.chars().count() > 20 {
+            out.push(hyphenated.clone());
+        }
+        out.push(joined);
+    } else {
+        out.push(hyphenated);
+    }
+    keep(ctx, out)
+}
+
+// ---------------------------------------------------------------------------
+// wave 2: catalan synth-based filters
+// ---------------------------------------------------------------------------
+
+/// `ApostophationHelper.getPrepositionAndDeterminer`.
+fn preposition_and_determiner(new_form: &str, gender_number: &str, preposition: &str) -> String {
+    let mut preposition = preposition.to_string();
+    if !preposition.is_empty() {
+        preposition = preposition
+            .chars()
+            .next()
+            .map(|c| c.to_lowercase().to_string())
+            .unwrap_or_default();
+    }
+    let starts_vowel = |re: &str| matches_full(&Regex::new(re.to_string()), new_form);
+    let mut apos = "";
+    if gender_number == "MS" {
+        if starts_vowel("(?i)h?[aeiouàèéíòóú].*")
+            && !starts_vowel("(?i)h?[ui][aeioàèéóò].+")
+        {
+            apos = "apos";
+        }
+    } else if gender_number == "FS" {
+        if starts_vowel("(?i)h?[aeoàèéíòóú].*")
+            || starts_vowel(
+                "(?i)h?[ui][^aeiouàèéíòóúüï]+[aeiou][ns]?|urbs",
+            )
+        {
+            if !starts_vowel("(?i)host|ira|inxa") {
+                apos = "apos";
+            }
+        }
+    }
+    let key = format!("{}{}{}", preposition, gender_number, apos);
+    match key.as_str() {
+        "MS" => "el ".into(),
+        "FS" => "la ".into(),
+        "MP" => "els ".into(),
+        "FP" => "les ".into(),
+        "MSapos" => "l'".into(),
+        "FSapos" => "l'".into(),
+        "aMS" => "al ".into(),
+        "aFS" => "a la ".into(),
+        "aMP" => "als ".into(),
+        "aFP" => "a les ".into(),
+        "aMSapos" => "a l'".into(),
+        "aFSapos" => "a l'".into(),
+        "dMS" => "del ".into(),
+        "dFS" => "de la ".into(),
+        "dMP" => "dels ".into(),
+        "dFP" => "de les ".into(),
+        "dMSapos" => "de l'".into(),
+        "dFSapos" => "de l'".into(),
+        "pMS" => "pel ".into(),
+        "pFS" => "per la ".into(),
+        "pMP" => "pels ".into(),
+        "pFP" => "per les ".into(),
+        "pMSapos" => "per l'".into(),
+        "pFSapos" => "per l'".into(),
+        _ => String::new(),
+    }
+}
+
+fn reading_with_tag_regex(token: &Token, pattern: &str) -> Option<(String, String, String)> {
+    let re = Regex::new(pattern.to_string());
+    token
+        .word()
+        .tags()
+        .iter()
+        .find(|d| matches_full(&re, d.pos().as_str()))
+        .map(|d| {
+            (
+                token.word().as_str().to_string(),
+                d.lemma().as_str().to_string(),
+                d.pos().as_str().to_string(),
+            )
+        })
+}
+
+fn synthesize_with_determiner(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let lemma_from_str = ctx.arg("lemmaFrom")?;
+    let lemma_select = ctx.arg("lemmaSelect")?;
+    let synth_all = ctx.arg("synthAllForms").as_deref() == Some("true");
+    let preposition_from = ctx.args_get("prepositionFrom").unwrap_or_default();
+
+    let lemma_from = ctx.get_position(&lemma_from_str)?;
+    let tokens = ctx.matched_token_refs();
+    if lemma_from < 1 || lemma_from > tokens.len() {
+        return None;
+    }
+    let word_token = tokens[lemma_from - 1];
+    let original_word = word_token.word().as_str();
+
+    let preposition = if !preposition_from.is_empty() {
+        if preposition_from.chars().all(|c| c.is_ascii_digit()) {
+            let pos = ctx.get_position(&preposition_from)?;
+            tokens
+                .get(pos)?
+                .word()
+                .as_str()
+                .chars()
+                .next()
+                .map(|c| c.to_lowercase().to_string())
+                .unwrap_or_default()
+        } else {
+            preposition_from.chars().next().map(|c| c.to_string()).unwrap_or_default()
+        }
+    } else {
+        String::new()
+    };
+
+    let original_at = reading_with_tag_regex(word_token, &lemma_select)?;
+
+    let second_gender_number = if lemma_from > 1 {
+        tokens[lemma_from - 2]
+            .word()
+            .tags()
+            .iter()
+            .find(|d| d.pos().as_str().starts_with('D'))
+            .and_then(|d| {
+                let pos = d.pos().as_str();
+                if pos.len() >= 5 {
+                    Some(pos[3..5].to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // all synth forms matching lemmaSelect; keep those equal to the original
+    // word unless synthAllForms
+    let select_re = ctx.regex_arg("lemmaSelect")?;
+    let synth = ctx.synth?;
+    let mut potential: Vec<(String, String)> = vec![(
+        original_at.2.clone(),
+        original_word.to_string(),
+    )];
+    for tag_forms in synth.synthesize_regex(&original_at.1, &select_re) {
+        let tag = original_at.2.clone();
+        let form = tag_forms;
+        if !synth_all && !form.eq_ignore_ascii_case(original_word) {
+            continue;
+        }
+        let priority = !second_gender_number.is_empty()
+            && (tag.contains(&second_gender_number)
+                || tag.contains(&{
+                    let s = &second_gender_number;
+                    format!("{}{}", &s[1..2], &s[0..1])
+                }));
+        let item = (tag, form);
+        if !potential.iter().any(|(t, f)| *t == item.0 && *f == item.1) {
+            if priority {
+                potential.insert(1, item);
+            } else {
+                potential.push(item);
+            }
+        }
+    }
+
+    let is_sentence_start = tokens
+        .first()
+        .map(|t| t.span().char().start >= ctx.span.char().start - 1)
+        .unwrap_or(false)
+        && ctx.matched_tokens.first().map(|&i| i == 0).unwrap_or(false);
+
+    const GN_PATTERNS: [(&str, &str); 4] = [
+        ("MS", "(N|A.).[MC][SN].*|V.P.*SM."),
+        ("FS", "(N|A.).[FC][SN].*|V.P.*SF."),
+        ("MP", "(N|A.).[MC][PN].*|V.P.*PM."),
+        ("FP", "(N|A.).[FC][PN].*|V.P.*PF."),
+    ];
+
+    let mut suggestions: Vec<String> = Vec::new();
+    for (tag, form) in &potential {
+        for (gn, pattern) in GN_PATTERNS {
+            if matches_full(&Regex::new(pattern.to_string()), tag) {
+                let mut sugg = format!(
+                    "{}{}",
+                    preposition_and_determiner(form, gn, &preposition),
+                    preserve_case(form, original_word)
+                );
+                if is_sentence_start {
+                    sugg = uppercase_first(&sugg);
+                }
+                if !suggestions.contains(&sugg) {
+                    suggestions.push(sugg);
+                }
+            }
+        }
+    }
+
+    let mut all = replacements;
+    all.extend(suggestions);
+    keep(ctx, all)
+}
+
+fn convert_to_gender_and_number(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let desired_gender_str = ctx.arg("gender").unwrap_or_default();
+    let desired_number_str = ctx.arg("number").unwrap_or_default();
+    let lemma_select = ctx.arg("lemmaSelect")?;
+    let keep_original = ctx.arg("keepOriginal").as_deref() == Some("true");
+
+    let tokens = ctx.matched_token_refs();
+    // first token at/after the match start
+    let mut pos_word = 0;
+    while pos_word < tokens.len()
+        && tokens[pos_word].span().char().start < ctx.span.char().start
+    {
+        pos_word += 1;
+    }
+    if pos_word >= tokens.len() {
+        return None;
+    }
+
+    let synth = ctx.synth?;
+
+    // splitGenderAndNumber: (prefix)(gender)(number)(rest)
+    fn split_gender_number(pos: &str) -> Option<(String, String, String, String, bool)> {
+        let chars: Vec<char> = pos.chars().collect();
+        if chars.len() < 3 {
+            return None;
+        }
+        let prefix_len = match chars[0] {
+            'N' => 2,
+            'A' | 'D' => 3,
+            'V' => {
+                if pos.starts_with("V.P") {
+                    4
+                } else {
+                    return None;
+                }
+            }
+            'P' => {
+                if pos.starts_with("PX") {
+                    3
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        if chars.len() < prefix_len + 2 {
+            return None;
+        }
+        let prefix: String = chars[..prefix_len].iter().collect();
+        let g = chars[prefix_len];
+        let n = chars[prefix_len + 1];
+        let rest: String = chars[prefix_len + 2..].iter().collect();
+        let is_verb = prefix.starts_with('V');
+        Some((prefix, g.to_string(), n.to_string(), rest, is_verb))
+    }
+
+    let atr_noun = reading_with_tag_regex(tokens[pos_word], &lemma_select)?;
+    let noun_split = split_gender_number(&atr_noun.2)?;
+    let (noun_gender, noun_number) = if noun_split.4 {
+        (noun_split.2.clone(), noun_split.1.clone())
+    } else {
+        (noun_split.1.clone(), noun_split.2.clone())
+    };
+    let desired_gender_str = if desired_gender_str.is_empty() {
+        noun_gender.clone()
+    } else {
+        desired_gender_str
+    };
+    let desired_number_str = if desired_number_str.is_empty() {
+        noun_number.clone()
+    } else {
+        desired_number_str
+    };
+
+    let synthesize_gn = |reading: &(String, String, String),
+                         gender: &str,
+                         number: &str|
+     -> String {
+        let split = match split_gender_number(&reading.2) {
+            Some(s) => s,
+            None => return String::new(),
+        };
+        let (gender, number) = if split.4 {
+            (number.to_string(), gender.to_string())
+        } else {
+            (gender.to_string(), number.to_string())
+        };
+        let add_gender = if split.0.starts_with("DA") { "" } else { "C" };
+        let target = format!(
+            "{}[{}{}][{}N]{}",
+            split.0, gender, add_gender, number, split.3
+        );
+        let re = Regex::new(target);
+        synth
+            .synthesize_regex(&reading.1, &re)
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    let mut start_pos = pos_word;
+    let mut end_pos = pos_word;
+    let mut suggestions: Vec<String> = Vec::new();
+
+    for gender_ch in desired_gender_str.chars() {
+        for number_ch in desired_number_str.chars() {
+            let desired_gender = gender_ch.to_string();
+            let desired_number = number_ch.to_string();
+            let mut builder = String::new();
+            let mut ignore = false;
+            if !keep_original {
+                let s = synthesize_gn(&atr_noun, &desired_gender, &desired_number);
+                if s.is_empty() {
+                    ignore = true;
+                }
+                builder.push_str(&s);
+            } else {
+                builder.push_str(tokens[pos_word].word().as_str());
+            }
+
+            let mut stop = false;
+            let mut i = pos_word;
+            let mut preposition_to_add = String::new();
+            let mut add_determiner = false;
+            let mut conditional = String::new();
+            let mut add_tot = String::new();
+            while !stop && i > 1 {
+                i -= 1;
+                let token = tokens[i];
+                let has_special = token.word().tags().iter().any(|d| {
+                    let p = d.pos().as_str();
+                    p == "_perfet" || p == "_GV_"
+                });
+                let atr = if has_special {
+                    None
+                } else {
+                    reading_with_tag_regex(
+                        token,
+                        "(A..|V.P..|D..|PX.)(.)(.)(.*)",
+                    )
+                };
+                if let Some(atr) = atr {
+                    if atr.2.starts_with("DA") {
+                        add_determiner = true;
+                        start_pos = i;
+                    } else if !add_determiner {
+                        let mut s = synthesize_gn(&atr, &desired_gender, &desired_number);
+                        if s.is_empty() {
+                            ignore = true;
+                        }
+                        if s == "bo" {
+                            s = "bon".to_string();
+                        }
+                        let prefix = format!("{}{}", conditional, {
+                            if tokens[i + 1].has_space_before() {
+                                " "
+                            } else {
+                                ""
+                            }
+                        });
+                        builder = format!("{}{}{}", prefix, s, builder);
+                        conditional.clear();
+                        start_pos = i;
+                        if atr.2.starts_with('D') && !atr.2.starts_with("DN") {
+                            stop = true;
+                        }
+                    } else {
+                        if atr.1 == "tot" {
+                            let s = synthesize_gn(&atr, &desired_gender, &desired_number);
+                            if !s.is_empty() {
+                                add_tot = format!("{} ", s);
+                                start_pos = i;
+                            }
+                        }
+                        stop = true;
+                    }
+                } else {
+                    let has = |p: &str| {
+                        token
+                            .word()
+                            .tags()
+                            .iter()
+                            .any(|d| d.pos().as_str() == p)
+                    };
+                    if has("SPS00") || has("LOC_PREP") {
+                        if add_determiner {
+                            let mut prep = token.word().as_str().to_lowercase();
+                            if prep == "pe" {
+                                prep = "per".to_string();
+                            }
+                            if prep == "d'" {
+                                prep = "de".to_string();
+                            }
+                            if prep == "a" || prep == "de" || prep == "per" {
+                                preposition_to_add = prep;
+                                start_pos = i;
+                            }
+                        }
+                        stop = true;
+                    } else if has("_PUNCT_CONT") || has("CC") {
+                        if pos_word - i == 1 {
+                            stop = true;
+                        } else {
+                            conditional = format!("{} {}", token.word().as_str(), conditional);
+                        }
+                    } else if has("RG") {
+                        conditional = format!("{} {}", token.word().as_str(), conditional);
+                    } else {
+                        stop = true;
+                    }
+                }
+            }
+
+            stop = false;
+            let mut i = pos_word;
+            conditional.clear();
+            let mut is_there_conjunction = false;
+            while !stop && i < tokens.len() - 1 {
+                i += 1;
+                let token = tokens[i];
+                let mut atr = reading_with_tag_regex(token, "(A..|V.P..|PX.)(.)(.)(.*)");
+                let starts_nc = token
+                    .word()
+                    .tags()
+                    .iter()
+                    .any(|d| d.pos().as_str().starts_with("NC"));
+                if is_there_conjunction && starts_nc {
+                    atr = None;
+                }
+                if let Some(atr) = atr {
+                    let s = synthesize_gn(&atr, &desired_gender, &desired_number);
+                    if s.is_empty() {
+                        ignore = true;
+                    }
+                    builder.push_str(&conditional);
+                    conditional.clear();
+                    builder.push_str(&format!(" {}", s));
+                    end_pos = i;
+                } else {
+                    let has = |p: &str| {
+                        token
+                            .word()
+                            .tags()
+                            .iter()
+                            .any(|d| d.pos().as_str() == p)
+                    };
+                    if has("RG") {
+                        conditional = format!("{} {}", conditional, token.word().as_str());
+                    } else if has("CC") {
+                        is_there_conjunction = true;
+                        conditional = format!("{} {}", conditional, token.word().as_str());
+                    } else if has("_PUNCT_CONT") {
+                        conditional = format!("{}{}", conditional, token.word().as_str());
+                    } else {
+                        stop = true;
+                    }
+                }
+            }
+
+            if add_determiner {
+                let det = preposition_and_determiner(
+                    &builder,
+                    &format!("{}{}", desired_gender, desired_number),
+                    &preposition_to_add,
+                );
+                builder = format!("{}{}", det, builder);
+            } else if !preposition_to_add.is_empty() {
+                builder = format!("{} {}", preposition_to_add, builder);
+            }
+            builder = format!("{}{}", add_tot, builder);
+            let suggestion = preserve_case(&builder, tokens[start_pos].word().as_str());
+            if end_pos == pos_word
+                && start_pos == pos_word
+                && tokens[pos_word].word().as_str() == suggestion
+            {
+                continue;
+            }
+            if !ignore {
+                suggestions.push(suggestion);
+            }
+        }
+    }
+
+    if suggestions.is_empty() {
+        return None;
+    }
+    let start_span = tokens[start_pos].span().clone();
+    let end_span = tokens[end_pos].span().clone();
+    let original = ctx
+        .sentence
+        .slice(Span::from_positions(start_span.start(), end_span.end()))
+        .to_string();
+    if suggestions.contains(&original) {
+        return None;
+    }
+    Some(JavaOutcome {
+        span: Span::from_positions(start_span.start(), end_span.end()),
+        replacements: suggestions,
+        message: None,
+    })
+    .or_else(|| keep(ctx, replacements))
+}
+
+fn possessius_redundants(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let mut pos_possessive = ctx.pattern_token_pos();
+    while pos_possessive < tokens.len()
+        && !tokens[pos_possessive]
+            .word()
+            .tags()
+            .iter()
+            .any(|d| d.pos().as_str().starts_with("PX"))
+    {
+        pos_possessive += 1;
+    }
+    if pos_possessive >= tokens.len() {
+        return None;
+    }
+    let possessive_tag = tokens[pos_possessive]
+        .word()
+        .tags()
+        .iter()
+        .find(|d| d.pos().as_str().starts_with("PX"))
+        .map(|d| d.pos().as_str().to_string())?;
+    let chars: Vec<char> = possessive_tag.chars().collect();
+    let number = chars.get(6).map(|c| c.to_string()).unwrap_or_default();
+    let persona = chars.get(2).map(|c| c.to_string()).unwrap_or_default();
+
+    // LT walks left over chunk-tagged GV tokens; without a ca chunker the
+    // walk stops immediately
+    let mut pos_verb = ctx.pattern_token_pos().saturating_sub(1);
+    while pos_verb > 0
+        && tokens[pos_verb]
+            .word()
+            .tags()
+            .iter()
+            .any(|d| d.pos().as_str() == "_GV_")
+    {
+        pos_verb -= 1;
+    }
+    pos_verb += 1;
+
+    let mut pronoun_found = false;
+    let mut has_some_pronoun = false;
+    let mut pos_pronoun = pos_verb.saturating_sub(1);
+    while !pronoun_found && pos_pronoun > 0
+        && tokens[pos_pronoun]
+            .word()
+            .tags()
+            .iter()
+            .any(|d| d.pos().as_str().starts_with('P'))
+    {
+        has_some_pronoun = true;
+        let tag = tokens[pos_pronoun]
+            .word()
+            .tags()
+            .iter()
+            .find(|d| d.pos().as_str().starts_with('P'))
+            .map(|d| d.pos().as_str().to_string());
+        if let Some(tag) = tag {
+            let pchars: Vec<char> = tag.chars().collect();
+            pronoun_found = pchars.get(2).map(|c| c.to_string()) == Some(persona.clone())
+                && (number == "C" || pchars.get(4).map(|c| c.to_string()) == Some(number.clone()));
+        }
+        pos_pronoun -= 1;
+    }
+    pos_pronoun = ctx.pattern_token_pos() + 1;
+    while !pronoun_found && pos_pronoun < tokens.len()
+        && tokens[pos_pronoun]
+            .word()
+            .tags()
+            .iter()
+            .any(|d| d.pos().as_str().starts_with('P'))
+    {
+        has_some_pronoun = true;
+        let tag = tokens[pos_pronoun]
+            .word()
+            .tags()
+            .iter()
+            .find(|d| d.pos().as_str().starts_with('P'))
+            .map(|d| d.pos().as_str().to_string());
+        if let Some(tag) = tag {
+            let pchars: Vec<char> = tag.chars().collect();
+            pronoun_found = pchars.get(2).map(|c| c.to_string()) == Some(persona.clone())
+                && (number == "C" || pchars.get(4).map(|c| c.to_string()) == Some(number.clone()));
+        }
+        pos_pronoun += 1;
+    }
+
+    let apostrophe_needed = pos_possessive >= 1
+        && tokens[pos_possessive - 1]
+            .word()
+            .tags()
+            .iter()
+            .any(|d| {
+                let p = d.pos().as_str();
+                p == "DA0MS0" || p == "DA0FS0"
+            })
+        && pos_possessive + 1 < tokens.len()
+        && matches_full(
+            &Regex::new("(?i)h?[aeiouàèéíòóú].*".to_string()),
+            tokens[pos_possessive + 1].word().as_str(),
+        );
+
+    if pronoun_found {
+        let (span, replacement) = if apostrophe_needed {
+            (
+                Span::from_positions(
+                    tokens[pos_possessive - 1].span().start(),
+                    tokens[pos_possessive + 1].span().end(),
+                ),
+                format!("l'{}", tokens[pos_possessive + 1].word().as_str()),
+            )
+        } else {
+            (
+                tokens[pos_possessive].span().clone(),
+                String::new(),
+            )
+        };
+        return Some(JavaOutcome {
+            span,
+            replacements: vec![replacement],
+            message: None,
+        });
+    }
+
+    if !has_some_pronoun {
+        let dative = match (persona.as_str(), number.as_str()) {
+            ("1", "S") => "em",
+            ("2", "S") => "et",
+            ("3", "S") | ("3", "C") => "li",
+            ("1", "P") => "ens",
+            ("2", "P") => "us",
+            ("3", "P") => "els",
+            _ => "li",
+        };
+        let verb_token = tokens[pos_verb].word().as_str();
+        let is_inf_ger = tokens[pos_verb]
+            .word()
+            .tags()
+            .iter()
+            .any(|d| {
+                let p = d.pos().as_str();
+                p.starts_with("VMN") || p.starts_with("VMG")
+            });
+        let mut suggestion = if is_inf_ger {
+            format!("{}{}", verb_token, dative)
+        } else {
+            format!("{}{}", preserve_case(dative, verb_token), verb_token.to_lowercase())
+        };
+        for i in pos_verb + 1..=pos_possessive.saturating_sub(2) {
+            if tokens[i].has_space_before() {
+                suggestion.push(' ');
+            }
+            suggestion.push_str(&tokens[i].word().as_str().to_lowercase());
+        }
+        if apostrophe_needed {
+            suggestion.push(' ');
+            suggestion.push_str(&format!("l'{}", tokens[pos_possessive + 1].word().as_str()));
+        } else {
+            for i in (pos_possessive.saturating_sub(1))..=(pos_possessive + 1).min(tokens.len() - 1) {
+                if i == pos_possessive {
+                    continue;
+                }
+                if tokens[i].has_space_before() {
+                    suggestion.push(' ');
+                }
+                suggestion.push_str(tokens[i].word().as_str());
+            }
+        }
+        return Some(JavaOutcome {
+            span: Span::from_positions(
+                tokens[pos_verb].span().start(),
+                tokens[pos_possessive + 1].span().end(),
+            ),
+            replacements: vec![suggestion],
+            message: None,
+        });
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// wave 2: PostponedAdjectiveConcordance (fr / es / ca), parametric port
+// ---------------------------------------------------------------------------
+
+struct AdjPatterns {
+    nom: &'static str,
+    nom_ms: &'static str,
+    nom_fs: &'static str,
+    nom_mp: &'static str,
+    nom_mn: &'static str,
+    nom_fp: &'static str,
+    nom_cs: &'static str,
+    nom_cp: &'static str,
+    nom_det: &'static str,
+    gn_: &'static str,
+    gn_ms: &'static str,
+    gn_fs: &'static str,
+    gn_mp: &'static str,
+    gn_fp: &'static str,
+    gn_cs: &'static str,
+    gn_cp: &'static str,
+    det: &'static str,
+    det_cs: &'static str,
+    det_ms: &'static str,
+    det_fs: &'static str,
+    det_mp: &'static str,
+    det_fp: &'static str,
+    det_cp: &'static str,
+    gn_ms_full: &'static str,
+    gn_fs_full: &'static str,
+    gn_mp_full: &'static str,
+    gn_fp_full: &'static str,
+    gn_cp_full: &'static str,
+    gn_cs_full: &'static str,
+    adj: &'static str,
+    adj_ms: &'static str,
+    adj_fs: &'static str,
+    adj_mp: &'static str,
+    adj_fp: &'static str,
+    adj_cp: &'static str,
+    adj_cs: &'static str,
+    adj_mn: &'static str,
+    adj_fn: &'static str,
+    adj_s: &'static str,
+    adj_p: &'static str,
+    adj_m: &'static str,
+    adj_f: &'static str,
+    adverb: &'static str,
+    conj: &'static str,
+    punct: &'static str,
+    loc_adv: &'static str,
+    accepted_adverbs: &'static str,
+    coordination: &'static str,
+    keep_count: &'static str,
+    keep_count2: &'static str,
+    stop_count: &'static str,
+    prepositions: &'static str,
+    level_prep: &'static str,
+    verb: &'static str,
+    gv: &'static str,
+    plus_word: &'static str,
+    /// es/ca: prepend ", original" and shift the span one char left
+    add_comma_variant: bool,
+    /// synth postags used to build the suggestions
+    synth_adj_cs: &'static str,
+    synth_adj_cp: &'static str,
+    synth_adj_p: &'static str,
+    synth_adj_ms: &'static str,
+    synth_adj_fs: &'static str,
+    synth_adj_mp: &'static str,
+    synth_adj_fp: &'static str,
+}
+
+const FR_ADJ: AdjPatterns = AdjPatterns {
+    nom: "[NZ] .*",
+    nom_ms: "[NZ] m s", nom_fs: "[NZ] f s", nom_mp: "[NZ] m p", nom_mn: "[NZ] m sp",
+    nom_fp: "[NZ] f p", nom_cs: "[NZ] e s", nom_cp: "[NZ] e sp",
+    nom_det: "[NZ] .*|(P\\+)?D .*",
+    gn_: "_GN_.*", gn_ms: "_GN_MS", gn_fs: "_GN_FS", gn_mp: "_GN_MP", gn_fp: "_GN_FP",
+    gn_cs: "_GN_[MF]S", gn_cp: "_GN_[MF]P",
+    det: "(P\\+)?D .*", det_cs: "(P\\+)?D e s", det_ms: "(P\\+)?D m s",
+    det_fs: "(P\\+)?D f s", det_mp: "(P\\+)?D m p", det_fp: "(P\\+)?D f p",
+    det_cp: "(P\\+)?D e p",
+    gn_ms_full: "[NZ] [me] (s|sp)|J [me] (s|sp)|V ppa m s|(P\\+)?D m (s|sp)",
+    gn_fs_full: "[NZ] [fe] (s|sp)|J [fe] (s|sp)|V ppa f s|(P\\+)?D f (s|sp)",
+    gn_mp_full: "[NZ] [me] (p|sp)|J [me] (p|sp)|V ppa m p|(P\\+)?D m (p|sp)",
+    gn_fp_full: "[NZ] [fe] (p|sp)|J [fe] (p|sp)|V ppa f p|(P\\+)?D f (p|sp)",
+    gn_cp_full: "[NZ] [fme] (p|sp)|J [fme] (p|sp)|(P\\+)?D [fme] (p|sp)",
+    gn_cs_full: "[NZ] [fme] (s|sp)|J [fme] (s|sp)|(P\\+)?D [fme] (s|sp)",
+    adj: "J .*|V ppa .*|PX.*",
+    adj_ms: "J [me] (s|sp)|V ppa m s", adj_fs: "J [fe] (s|sp)|V ppa f s",
+    adj_mp: "J [me] (p|sp)|V ppa m p", adj_fp: "J [fe] (p|sp)|V ppa f p",
+    adj_cp: "J e (p|sp)", adj_cs: "J e (s|sp)", adj_mn: "J m sp", adj_fn: "J f sp",
+    adj_s: "J .* (s|sp)|V ppa . s", adj_p: "J .* (p|sp)|V ppa . p",
+    adj_m: "J [me] .*|V ppa [me] .*", adj_f: "J [fe] .*|V ppa [fe] .*",
+    adverb: "A", conj: "C .*", punct: "_PUNCT", loc_adv: "A", accepted_adverbs: "A",
+    coordination: "et|ou|ni", keep_count: "Y|J .*|N .*|D .*|P.*|V ppa .*|M nonfin|UNKNOWN|Z.*|V.* inf|V ppr",
+    keep_count2: ",|et|ou|ni", stop_count: "[;:\\(\\)\\[\\]–—―‒]",
+    prepositions: "P.*",
+    level_prep: "d'|de|des|du|à|au|aux|en|dans|sur|entre|par|pour|avec|sans|contre|comme",
+    verb: "V.* (inf|ind|sub|con|ppr|imp).*", gv: "_GV_", plus_word: "plus",
+    add_comma_variant: false,
+    synth_adj_cs: "J e p", synth_adj_cp: "J e s", synth_adj_p: "J . p|V ppa . p",
+    synth_adj_ms: "J [me] sp?|V ppa m s", synth_adj_fs: "J [fe] sp?|V ppa f s",
+    synth_adj_mp: "J [me] s?p|V ppa m p", synth_adj_fp: "J [fe] s?p|V ppa f p",
+};
+
+const ES_ADJ: AdjPatterns = AdjPatterns {
+    nom: "N.*",
+    nom_ms: "N.MS.*|PI0MS000", nom_fs: "N.FS.*|PI0FS000", nom_mp: "N.MP.*",
+    nom_mn: "N.MN.*", nom_fp: "N.FP.*", nom_cs: "N.CS.*", nom_cp: "N.CP.*",
+    nom_det: "N.*|D[NDA0I].*|PI0[MF]S000",
+    gn_: "_GN_.*", gn_ms: "_GN_MS", gn_fs: "_GN_FS", gn_mp: "_GN_MP", gn_fp: "_GN_FP",
+    gn_cs: "_GN_[MF]S", gn_cp: "_GN_[MF]P",
+    det: "D[NDA0IP].*", det_cs: "D[NDA0IP]0CS0", det_ms: "D[NDA0IP]0MS0",
+    det_fs: "D[NDA0IP]0FS0", det_mp: "D[NDA0IP]0MP0", det_fp: "D[NDA0IP]0FP0",
+    det_cp: "D[NDA0IP]0CP0",
+    gn_ms_full: "N.[MC][SN].*|A..[MC][SN].*|V.P..SM.?|PX.MS.*|D[NDA0I]0MS0|PI0MS000",
+    gn_fs_full: "N.[FC][SN].*|A..[FC][SN].*|V.P..SF.?|PX.FS.*|D[NDA0I]0FS0|PI0FS000",
+    gn_mp_full: "N.[MC][PN].*|A..[MC][PN].*|V.P..PM.?|PX.MP.*|D[NDA0I]0MP0",
+    gn_fp_full: "N.[FC][PN].*|A..[FC][PN].*|V.P..PF.?|PX.FP.*|D[NDA0I]0FP0",
+    gn_cp_full: "N.[FMC][PN].*|A..[FMC][PN].*|D[NDA0I]0[FM]P0",
+    gn_cs_full: "N.[FMC][SN].*|A..[FMC][SN].*|D[NDA0I]0[FM]S0||PI0[MFC]S000",
+    adj: "AQ.*|V.P.*|PX.*|.*LOC_ADJ.*",
+    adj_ms: "A..[MC][SN].*|V.P..SM.?|PX.MS.*", adj_fs: "A..[FC][SN].*|V.P..SF.?|PX.FS.*",
+    adj_mp: "A..[MC][PN].*|V.P..PM.?|PX.MP.*", adj_fp: "A..[FC][PN].*|V.P..PF.?|PX.FP.*",
+    adj_cp: "A..C[PN].*", adj_cs: "A..C[SN].*", adj_mn: "", adj_fn: "",
+    adj_s: "A...[SN].*|V.P..S..?|PX..S.*", adj_p: "A...[PN].*|V.P..P..?|PX..P.*",
+    adj_m: "", adj_f: "",
+    adverb: "R.|.*LOC_ADV.*", conj: "C.|.*LOC_CONJ.*", punct: "_PUNCT",
+    loc_adv: ".*LOC_ADV.*", accepted_adverbs: "RG_before",
+    coordination: "y|e|o|u|ni",
+    keep_count: "A.*|N.*|D[NAIDP].*|SPS.*|SP:DA|.*LOC_ADV.*|V.P.*|_PUNCT.*|.*LOC_ADJ.*|PX.*|PI0.S000|UNKNOWN|V.N.{4}",
+    keep_count2: ",|y|e|o|ni|u", stop_count: ";|lo",
+    prepositions: "SP.*",
+    level_prep: "de|del|en|sobre|a|entre|por|con|sin|contra|para",
+    verb: "V.[^P].*|_GV_", gv: "_GV_", plus_word: "más",
+    add_comma_variant: true,
+    synth_adj_cs: "", synth_adj_cp: "", synth_adj_p: "A..P.|V.P..P|PX..P.*",
+    synth_adj_ms: "A..MS.|V.P..SM|PX.MS.*", synth_adj_fs: "A..FS.|V.P..SF|PX.FS.*",
+    synth_adj_mp: "A..MP.|V.P..PM|PX.MP.*", synth_adj_fp: "A..FP.|V.P..PF|PX.FP.*",
+};
+
+const CA_ADJ: AdjPatterns = AdjPatterns {
+    nom: "N.*",
+    nom_ms: "N.MS.*|PI0MS000", nom_fs: "N.FS.*|PI0FS000", nom_mp: "N.MP.*",
+    nom_mn: "N.MN.*", nom_fp: "N.FP.*", nom_cs: "N.CS.*", nom_cp: "N.CP.*",
+    nom_det: "N.*|D.*|PI0[MF]S000",
+    gn_: "_GN_.*", gn_ms: "_GN_MS", gn_fs: "_GN_FS", gn_mp: "_GN_MP", gn_fp: "_GN_FP",
+    gn_cs: "_GN_[MF]S", gn_cp: "_GN_[MF]P",
+    det: "D.*", det_cs: "D..C S.*", det_ms: "D..M S.*",
+    det_fs: "D..F S.*", det_mp: "D..M P.*", det_fp: "D..F P.*", det_cp: "D..C P.*",
+    gn_ms_full: "N.[MC][SN].*|A..[MC][SN].*|V.P..SM.?|PX.MS.*|D..MS.*|PI0MS000",
+    gn_fs_full: "N.[FC][SN].*|A..[FC][SN].*|V.P..SF.?|PX.FS.*|D..FS.*|PI0FS000",
+    gn_mp_full: "N.[MC][PN].*|A..[MC][PN].*|V.P..PM.?|PX.MP.*|D..MP.*",
+    gn_fp_full: "N.[FC][PN].*|A..[FC][PN].*|V.P..PF.?|PX.FP.*|D..FP.*",
+    gn_cp_full: "N.[FMC][PN].*|A..[FMC][PN].*|D..[FM]P.*",
+    gn_cs_full: "N.[FMC][SN].*|A..[FMC][SN].*|D..[FM]S.*",
+    adj: "AQ.*|V.P.*|PX.*|.*LOC_ADJ.*",
+    adj_ms: "A..[MC][SN].*|V.P..SM.?|PX.MS.*", adj_fs: "A..[FC][SN].*|V.P..SF.?|PX.FS.*",
+    adj_mp: "A..[MC][PN].*|V.P..PM.?|PX.MP.*", adj_fp: "A..[FC][PN].*|V.P..PF.?|PX.FP.*",
+    adj_cp: "A..C[PN].*", adj_cs: "A..C[SN].*", adj_mn: "", adj_fn: "",
+    adj_s: "A...[SN].*|V.P..S..?|PX..S.*", adj_p: "A...[PN].*|V.P..P..?|PX..P.*",
+    adj_m: "", adj_f: "",
+    adverb: "R", conj: "C.*|.*LOC_CONJ.*", punct: "_PUNCT",
+    loc_adv: ".*LOC_ADV.*", accepted_adverbs: "RG_before",
+    coordination: "i|o|ni",
+    keep_count: "A.*|N.*|D.*|SPS.*|SP.*|.*LOC_ADV.*|V.P.*|_PUNCT.*|.*LOC_ADJ.*|PX.*|PI0.S000|UNKNOWN|V.N.{4}",
+    keep_count2: ",|i|o|ni", stop_count: "[;:\\(\\)\\[\\]]",
+    prepositions: "SP.*",
+    level_prep: "de|del|d'|en|sobre|a|entre|per|amb|sense|contra|per a",
+    verb: "V.[^P].*|_GV_", gv: "_GV_", plus_word: "més",
+    add_comma_variant: true,
+    synth_adj_cs: "", synth_adj_cp: "", synth_adj_p: "A..P.|V.P..P|PX..P.*",
+    synth_adj_ms: "A..MS.|V.P..SM|PX.MS.*", synth_adj_fs: "A..FS.|V.P..SF|PX.FS.*",
+    synth_adj_mp: "A..MP.|V.P..PM|PX.MP.*", synth_adj_fp: "A..FP.|V.P..PF|PX.FP.*",
+};
+
+fn postponed_adjective(
+    ctx: &mut FilterCtx,
+    lang: PostponedAdjLang,
+    replacements: Vec<String>,
+) -> Option<JavaOutcome> {
+    let p: &AdjPatterns = match lang {
+        PostponedAdjLang::Fr => &FR_ADJ,
+        PostponedAdjLang::Es => &ES_ADJ,
+        PostponedAdjLang::Ca => &CA_ADJ,
+    };
+
+    let tokens = ctx.sentence_tokens();
+    let i = ctx.pattern_token_pos();
+    if i >= tokens.len() {
+        return None;
+    }
+
+    let pos_matches = |idx: usize, pattern: &str| -> bool {
+        if pattern.is_empty() {
+            return false;
+        }
+        let re = Regex::new(pattern.to_string());
+        tokens
+            .get(idx)
+            .map(|t| {
+                t.word()
+                    .tags()
+                    .iter()
+                    .any(|d| matches_full(&re, d.pos().as_str()))
+            })
+            .unwrap_or(false)
+    };
+    let word_matches = |idx: usize, pattern: &str| -> bool {
+        let re = Regex::new(pattern.to_string());
+        tokens
+            .get(idx)
+            .map(|t| matches_full(&re, t.word().as_str()))
+            .unwrap_or(false)
+    };
+
+    const MAX_LEVELS: usize = 4;
+    let mut is_plural = true;
+    let mut is_prev_noun = false;
+    let mut can_be_ms = false;
+    let mut can_be_fs = false;
+    let mut can_be_mp = false;
+    let mut can_be_fp = false;
+    let mut can_be_p = false;
+    let mut c_nms = [0usize; MAX_LEVELS];
+    let mut c_nfs = [0usize; MAX_LEVELS];
+    let mut c_nmp = [0usize; MAX_LEVELS];
+    let mut c_nmn = [0usize; MAX_LEVELS];
+    let mut c_nfp = [0usize; MAX_LEVELS];
+    let mut c_ncs = [0usize; MAX_LEVELS];
+    let mut c_ncp = [0usize; MAX_LEVELS];
+    let mut c_dms = [0usize; MAX_LEVELS];
+    let mut c_dfs = [0usize; MAX_LEVELS];
+    let mut c_dmp = [0usize; MAX_LEVELS];
+    let mut c_dfp = [0usize; MAX_LEVELS];
+    let mut c_nt = [0usize; MAX_LEVELS];
+    let mut c_n = [0usize; MAX_LEVELS];
+    let mut c_d = [0usize; MAX_LEVELS];
+    let mut level = 0usize;
+
+    let mut adverb_appeared = false;
+    let mut conjunction_appeared = false;
+    let mut punctuation_appeared = false;
+
+    macro_rules! keep_counting {
+        ($idx:expr) => {{
+            let idx = $idx;
+            if word_matches(idx, p.level_prep) || tokens.get(idx).map(|t| t.word().as_str() == ".").unwrap_or(false) {
+                true
+            } else if (adverb_appeared && conjunction_appeared)
+                || (adverb_appeared && punctuation_appeared)
+                || (conjunction_appeared && punctuation_appeared)
+                || (punctuation_appeared && pos_matches(idx, p.punct))
+            {
+                false
+            } else {
+                (pos_matches(idx, p.keep_count)
+                    || word_matches(idx, p.keep_count2)
+                    || pos_matches(idx, p.accepted_adverbs))
+                    && !word_matches(idx, p.stop_count)
+                    && (!pos_matches(idx, p.gv) || pos_matches(idx, p.gn_))
+            }
+        }};
+    }
+
+    let mut j = 1usize;
+    while i >= j && i - j > 0 && keep_counting!(i - j) && level < MAX_LEVELS {
+        let idx = i - j;
+        if !is_prev_noun {
+            if pos_matches(idx, p.nom)
+                || (idx >= 1
+                    && !pos_matches(idx, p.nom)
+                    && pos_matches(idx, p.adj)
+                    && pos_matches(idx - 1, p.det))
+            {
+                if pos_matches(idx, p.gn_ms) {
+                    c_nms[level] += 1;
+                    can_be_ms = true;
+                }
+                if pos_matches(idx, p.gn_fs) {
+                    c_nfs[level] += 1;
+                    can_be_fs = true;
+                }
+                if pos_matches(idx, p.gn_mp) {
+                    c_nmp[level] += 1;
+                    can_be_mp = true;
+                }
+                if pos_matches(idx, p.gn_fp) {
+                    c_nfp[level] += 1;
+                    can_be_fp = true;
+                }
+            }
+            if !pos_matches(idx, p.gn_) {
+                if pos_matches(idx, p.nom_ms) {
+                    c_nms[level] += 1;
+                    can_be_ms = true;
+                } else if pos_matches(idx, p.nom_fs) {
+                    c_nfs[level] += 1;
+                    can_be_fs = true;
+                } else if pos_matches(idx, p.nom_mp) {
+                    c_nmp[level] += 1;
+                    can_be_mp = true;
+                } else if pos_matches(idx, p.nom_mn) {
+                    c_nmn[level] += 1;
+                    can_be_ms = true;
+                    can_be_mp = true;
+                } else if pos_matches(idx, p.nom_fp) {
+                    c_nfp[level] += 1;
+                    can_be_fp = true;
+                } else if pos_matches(idx, p.nom_cs) {
+                    c_ncs[level] += 1;
+                    can_be_ms = true;
+                    can_be_fs = true;
+                } else if pos_matches(idx, p.nom_cp) {
+                    c_ncp[level] += 1;
+                    can_be_fp = true;
+                    can_be_mp = true;
+                }
+            }
+        }
+        if pos_matches(idx, p.nom) {
+            c_nt[level] += 1;
+            is_prev_noun = true;
+        } else {
+            is_prev_noun = false;
+        }
+        if pos_matches(idx, p.det_cs) {
+            if pos_matches(idx + 1, p.nom_ms) {
+                c_dms[level] += 1;
+                can_be_ms = true;
+            }
+            if pos_matches(idx + 1, p.nom_fs) {
+                c_dfs[level] += 1;
+                can_be_fs = true;
+            }
+        }
+        if pos_matches(idx, p.det_cp) {
+            if pos_matches(idx + 1, p.nom_mp) {
+                c_dms[level] += 1;
+                can_be_mp = true;
+            }
+            if pos_matches(idx + 1, p.nom_fp) {
+                c_dfs[level] += 1;
+                can_be_fp = true;
+            }
+        }
+        if !pos_matches(idx, p.adverb) {
+            if pos_matches(idx, p.det_ms) {
+                c_dms[level] += 1;
+                can_be_ms = true;
+            }
+            if pos_matches(idx, p.det_fs) {
+                c_dfs[level] += 1;
+                can_be_fs = true;
+            }
+            if pos_matches(idx, p.det_mp) {
+                c_dmp[level] += 1;
+                can_be_mp = true;
+            }
+            if pos_matches(idx, p.det_fp) {
+                c_dfp[level] += 1;
+                can_be_fp = true;
+            }
+        }
+        if idx >= 1
+            && word_matches(idx, p.level_prep)
+            && pos_matches(idx, p.prepositions)
+            && !pos_matches(idx, p.conj)
+            && !word_matches(idx - 1, p.coordination)
+            && !pos_matches(idx + 1, p.adverb)
+        {
+            level += 1;
+        }
+        // update apparitions for this token
+        conjunction_appeared |= pos_matches(idx, p.conj);
+        if tokens.get(idx).map(|t| t.word().as_str() == "com").unwrap_or(false) {
+            // skip
+        } else if pos_matches(idx, p.nom) || pos_matches(idx, p.adj) {
+            adverb_appeared = false;
+            conjunction_appeared = false;
+            punctuation_appeared = false;
+        } else {
+            adverb_appeared |= pos_matches(idx, p.adverb);
+            punctuation_appeared |= pos_matches(idx, p.punct)
+                || tokens.get(idx).map(|t| t.word().as_str() == ",").unwrap_or(false);
+        }
+        j += 1;
+    }
+    level += 1;
+    let level = level.min(MAX_LEVELS);
+
+    let mut c_ntotal = 0;
+    let mut c_dtotal = 0;
+    for lvl in 0..level {
+        c_n[lvl] = c_nms[lvl] + c_nfs[lvl] + c_nmp[lvl] + c_nfp[lvl] + c_ncs[lvl] + c_ncp[lvl] + c_nmn[lvl];
+        c_d[lvl] = c_dms[lvl] + c_dfs[lvl] + c_dmp[lvl] + c_dfp[lvl];
+        c_ntotal += c_n[lvl];
+        c_dtotal += c_d[lvl];
+        if pos_matches(i, p.adj_mp)
+            && (c_n[lvl] > 1 || c_d[lvl] > 1)
+            && (c_nms[lvl] + c_nmn[lvl] + c_nmp[lvl] + c_ncs[lvl] + c_ncp[lvl] + c_dms[lvl] + c_dmp[lvl]) > 0
+            && (c_nfs[lvl] + c_nfp[lvl] <= c_nt[lvl])
+        {
+            return None;
+        }
+        if pos_matches(i, p.adj_fp)
+            && (c_n[lvl] > 1 || c_d[lvl] > 1)
+            && ((c_nms[lvl] + c_nmp[lvl] + c_nmn[lvl] + c_dms[lvl] + c_dmp[lvl]) == 0
+                || (c_nt[lvl] > 0 && c_nfs[lvl] + c_nfp[lvl] >= c_nt[lvl]))
+        {
+            return None;
+        }
+        if c_n[lvl] + c_d[lvl] > 0 {
+            is_plural = is_plural && c_d[lvl] > 1 && level > 1;
+            can_be_p = can_be_p || c_n[lvl] > 1;
+        }
+    }
+    is_plural = is_plural
+        || (i >= 2
+            && c_nmp[0] + c_nfp[0] + c_ncp[0] > 0
+            && tokens.get(i - 2).map(|t| t.word().as_str() == ",").unwrap_or(false));
+    if c_ntotal == 0 && c_dtotal == 0 {
+        return None;
+    }
+
+    // select patterns by the adjective's own morphology
+    let (subst_pattern, adj_pattern, gn_pattern) = if pos_matches(i, p.adj_cs) {
+        (p.gn_cs_full, p.adj_s, p.gn_cs)
+    } else if pos_matches(i, p.adj_cp) {
+        (p.gn_cp_full, p.adj_p, p.gn_cp)
+    } else if !p.adj_mn.is_empty() && pos_matches(i, p.adj_mn) {
+        (p.gn_ms_full, p.adj_m, p.gn_ms)
+    } else if !p.adj_fn.is_empty() && pos_matches(i, p.adj_fn) {
+        (p.gn_fs_full, p.adj_fn, p.gn_fs)
+    } else if pos_matches(i, p.adj_ms) {
+        (p.gn_ms_full, p.adj_ms, p.gn_ms)
+    } else if pos_matches(i, p.adj_fs) {
+        (p.gn_fs_full, p.adj_fs, p.gn_fs)
+    } else if pos_matches(i, p.adj_mp) {
+        (p.gn_mp_full, p.adj_mp, p.gn_mp)
+    } else if pos_matches(i, p.adj_fp) {
+        (p.gn_fp_full, p.adj_fp, p.gn_fp)
+    } else {
+        return None;
+    };
+
+    // a previous agreeing noun cancels the match
+    let mut j = 1usize;
+    let mut keep_going = true;
+    while i >= j && i - j > 0 && keep_going {
+        let idx = i - j;
+        if pos_matches(idx, p.nom_det) && pos_matches(idx, gn_pattern) {
+            return None;
+        } else if !pos_matches(idx, p.gn_) && pos_matches(idx, subst_pattern) {
+            return None;
+        }
+        keep_going = !pos_matches(idx, p.nom_det);
+        j += 1;
+    }
+
+    // context check on the previous token
+    let prev_ok = (i >= 1 && pos_matches(i - 1, p.nom) && !pos_matches(i - 1, subst_pattern))
+        || (i >= 1 && pos_matches(i - 1, p.gn_) && !pos_matches(i - 1, gn_pattern))
+        || (i >= 1 && pos_matches(i - 1, p.adj) && !pos_matches(i - 1, adj_pattern))
+        || (i > 2
+            && pos_matches(i - 1, p.accepted_adverbs)
+            && !pos_matches(i - 2, p.verb)
+            && !pos_matches(i - 2, p.prepositions))
+        || (i > 3
+            && pos_matches(i - 1, p.loc_adv)
+            && pos_matches(i - 2, p.loc_adv)
+            && !pos_matches(i - 3, p.verb)
+            && !pos_matches(i - 3, p.prepositions));
+    if !prev_ok {
+        return None;
+    }
+
+    if !(is_plural && pos_matches(i, p.adj_s)) {
+        let mut j = 1usize;
+        while i >= j && i - j > 0 && keep_counting!(i - j) && (level > 1 || j < 4) {
+            let idx = i - j;
+            if !pos_matches(idx, p.gn_)
+                && pos_matches(idx, p.nom_det)
+                && pos_matches(idx, subst_pattern)
+            {
+                return None;
+            } else if pos_matches(idx, gn_pattern) {
+                return None;
+            }
+            j += 1;
+        }
+    }
+
+    // synthesize the concordant forms
+    let synth = ctx.synth?;
+    let original_token = tokens.get(i)?.word().as_str().to_string();
+    let lemma = tokens
+        .get(i)?
+        .word()
+        .tags()
+        .iter()
+        .find(|d| {
+            let re = Regex::new(p.adj.to_string());
+            matches_full(&re, d.pos().as_str())
+        })
+        .map(|d| d.lemma().as_str().to_string())?;
+
+    let mut suggestions: Vec<String> = Vec::new();
+    let mut push = |tag: &str, suggs: &mut Vec<String>| {
+        if tag.is_empty() {
+            return;
+        }
+        let re = Regex::new(tag.to_string());
+        for form in synth.synthesize_regex(&lemma, &re) {
+            if !suggs.contains(&form) {
+                suggs.push(form);
+            }
+        }
+    };
+
+    if !p.synth_adj_cs.is_empty() && pos_matches(i, p.adj_cs) {
+        push(p.synth_adj_cs, &mut suggestions);
+    }
+    if !p.synth_adj_cp.is_empty() && suggestions.is_empty() && pos_matches(i, p.adj_cp) {
+        push(p.synth_adj_cp, &mut suggestions);
+    }
+    if suggestions.is_empty() && is_plural {
+        push(p.synth_adj_p, &mut suggestions);
+    }
+    if suggestions.is_empty() {
+        if can_be_ms && !is_plural {
+            push(p.synth_adj_ms, &mut suggestions);
+        }
+        if can_be_fs && !is_plural {
+            push(p.synth_adj_fs, &mut suggestions);
+        }
+        if can_be_mp {
+            push(p.synth_adj_mp, &mut suggestions);
+        }
+        if can_be_fp {
+            push(p.synth_adj_fp, &mut suggestions);
+        }
+        if can_be_ms && (is_plural || can_be_p) {
+            push(p.synth_adj_mp, &mut suggestions);
+        }
+        if can_be_fs && !can_be_ms && (is_plural || can_be_p) {
+            push(p.synth_adj_fp, &mut suggestions);
+        }
+    }
+
+    let lower_original = original_token.to_lowercase();
+    suggestions.retain(|s| *s != lower_original);
+
+    if p.add_comma_variant {
+        let mut definitive: Vec<String> = Vec::new();
+        definitive.push(format!(", {}", original_token));
+        for s in &suggestions {
+            definitive.push(format!(" {}", s));
+        }
+        let mut span = ctx.span.clone();
+        let s = span.start();
+        if s.char > 0 {
+            let text = ctx.sentence.text();
+            let bytes = text.as_bytes();
+            let mut byte = s.byte;
+            if byte > 0 {
+                byte -= 1;
+                while byte > 0 && !text.is_char_boundary(byte) {
+                    byte -= 1;
+                }
+            }
+            span.set_start(crate::types::Position { byte, char: s.char - 1 });
+        }
+        return Some(JavaOutcome {
+            span,
+            replacements: definitive,
+            message: None,
+        });
+    }
+
+    if suggestions.is_empty() {
+        None
+    } else {
+        keep(ctx, suggestions)
+    }
+    .or_else(|| keep(ctx, replacements))
 }

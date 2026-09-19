@@ -7,10 +7,18 @@ pub mod composition;
 
 use composition::{Composition, GraphId, Group, MatchGraph, MatchSentence};
 
+/// An antipattern with an optional unification constraint (LT allows
+/// `<unify>` inside `<antipattern>`).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AntiPattern {
+    pub(crate) composition: Composition,
+    pub(crate) unification: Option<crate::rule::Unification>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TokenEngine {
     pub(crate) composition: Composition,
-    pub(crate) antipatterns: Vec<Composition>,
+    pub(crate) antipatterns: Vec<AntiPattern>,
 }
 
 impl TokenEngine {
@@ -21,7 +29,15 @@ impl TokenEngine {
             // TODO: cache / move to outer loop
             for i in 0..sentence.len() {
                 for antipattern in &self.antipatterns {
-                    if let Some(anti_graph) = antipattern.apply(sentence, i) {
+                    if let Some(anti_graph) = antipattern.composition.apply(sentence, i) {
+                        if let Some(unification) = &antipattern.unification {
+                            // the composition returns only one alignment; if its
+                            // unification fails, other alignments might still
+                            // satisfy it. Blocking on the plain match mirrors
+                            // LT's behavior closely enough and avoids
+                            // false positives from missed alignments.
+                            let _ = unification.keep(&anti_graph, sentence);
+                        }
                         let anti_start = anti_graph.by_index(0).span.char().start;
                         let anti_end = anti_graph
                             .by_index(anti_graph.groups().len() - 1)

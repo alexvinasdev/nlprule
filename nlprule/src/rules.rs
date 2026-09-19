@@ -104,7 +104,68 @@ impl Rules {
     }
 
     /// Compute the suggestions for the given sentence by checking all rules.
+    /// Builtin rules that are Java classes in LT (no XML): duplicated words
+    /// and doubled punctuation.
+    fn builtin_suggestions(&self, sentence: &Sentence) -> Vec<Suggestion> {
+        let mut out = Vec::new();
+        let tokens: Vec<_> = sentence.iter().collect();
+        if tokens.len() < 2 {
+            return out;
+        }
+        // WORD_REPEAT_RULE: adjacent identical words
+        for pair in tokens.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let ta = a.word().as_str();
+            let tb = b.word().as_str();
+            if !b.has_space_before() || ta.len() < 2 {
+                continue;
+            }
+            if ta.chars().all(char::is_alphabetic)
+                && ta.eq_ignore_ascii_case(tb)
+                && !matches!(ta.to_lowercase().as_str(), "that" | "had")
+            {
+                let text = sentence.text();
+                let span = Span::from_positions(a.span().start(), a.span().end());
+                let word = ta;
+                out.push(Suggestion::new(
+                    "WORD_REPEAT_RULE".to_string(),
+                    format!(
+                        "Possible typo: you repeated a word",
+                    ),
+                    span,
+                    vec![word.to_string()],
+                ));
+                let _ = text;
+                break;
+            }
+        }
+        // DOUBLE_PUNCTUATION: doubled , ; : ! ?
+        for pair in tokens.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let ta = a.word().as_str();
+            let tb = b.word().as_str();
+            if b.has_space_before() {
+                continue;
+            }
+            if ta.chars().count() == 1
+                && ta == tb
+                && [",", ";", ":", "!", "?"].contains(&ta)
+            {
+                let span = Span::from_positions(a.span().start(), b.span().end());
+                out.push(Suggestion::new(
+                    "DOUBLE_PUNCTUATION".to_string(),
+                    "Double punctuation.".to_string(),
+                    span,
+                    vec![ta.to_string()],
+                ));
+                break;
+            }
+        }
+        out
+    }
+
     pub fn apply(&self, sentence: &Sentence) -> Vec<Suggestion> {
+        let plain_sentence = sentence;
         let sentence = MatchSentence::new(sentence);
 
         let mut output: Vec<(usize, Suggestion)> = self
@@ -127,6 +188,15 @@ impl Rules {
             })
             .flatten()
             .collect();
+
+        for (i, suggestion) in self.builtin_suggestions(plain_sentence)
+            .into_iter()
+            .enumerate()
+            .map(|(j, sugg)| (self.rules.len() + j, sugg))
+        {
+            output.push((i, suggestion));
+        }
+
 
         output.sort_by(|(ia, a), (ib, b)| {
             a.span()

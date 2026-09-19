@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 /// A speller vocabulary: an FST over lowercased word forms mapping to the
 /// index of one original-cased form. Approximates LT's `MorfologikSpeller`.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SpellerDict {
     /// `fst::Map` data: lowercased form -> `(index << 5) | frequency`,
     /// where frequency is morfologik's 0..=25 rank (higher = more frequent).

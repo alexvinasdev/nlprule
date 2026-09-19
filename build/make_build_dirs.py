@@ -618,6 +618,21 @@ def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
         dist_grammar = dist_rules / "grammar.xml"
         canonicalize(dist_grammar if dist_grammar.exists() else grammar, grammar)
 
+    # expand <phraseref idref="..."/> with the matching <phrase> body
+    if grammar.exists():
+        content = grammar.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"<phrases>(.*?)</phrases>", content, re.S)
+        if m:
+            defs = dict(re.findall(r'<phrase id="([^"]+)">(.*?)</phrase>', m.group(1), re.S))
+            content, n = re.subn(
+                r'<phraseref idref="([^"]+)"\s*/>\s*|<phraseref idref="([^"]+)">\s*</phraseref>',
+                lambda mm: defs.get(mm.group(1) or mm.group(2), "").strip(),
+                content,
+            )
+            if n:
+                grammar.write_text(content, encoding="utf-8")
+                logging.info("%s: expanded %d phraserefs", lang, n)
+
     # convert LT SimpleReplaceRule data tables into XML rules
     if grammar.exists():
         tables = []

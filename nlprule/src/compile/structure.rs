@@ -352,8 +352,9 @@ pub struct Token {
     /// Token type attribute (LT 6.x); accepted but unused.
     #[serde(rename = "type")]
     pub token_type: Option<String>,
-    /// LT 6.x attribute; accepted but unused.
+    /// LT 6.x attributes; accepted but unused.
     pub raw_pos: Option<String>,
+    pub setpos: Option<String>,
     pub unify: Option<String>,
     pub case_sensitive: Option<String>,
     pub inflected: Option<String>,
@@ -516,6 +517,10 @@ pub struct Rule {
     /// Rule type attribute (LT 6.x, e.g. 'personal'); accepted but unused.
     #[serde(rename = "type")]
     pub rule_type: Option<String>,
+    /// LT premium flag; accepted but unused.
+    pub premium: Option<String>,
+    /// LT 6.x tone tags; accepted but unused.
+    pub tone_tags: Option<String>,
     #[serde(rename = "__unused_unifications")]
     pub unifications: Option<Vec<Unification>>,
 }
