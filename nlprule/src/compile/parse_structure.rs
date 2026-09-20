@@ -1019,6 +1019,7 @@ fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result
             "sr" => Some(DateLang::Sr),
             "br" => Some(DateLang::Br),
             "eo" => Some(DateLang::Eo),
+            "ar" => Some(DateLang::Ar),
             _ => None,
         }
     };
@@ -1084,7 +1085,7 @@ fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result
                 .map(|x| Regex::from_java_regex(x, false, false))
                 .collect::<Result<Vec<_>, Error>>()?,
         }),
-        "AdaptSuggestionsFilter" => Ok(PostFilter::AdaptSuggestions),
+        "AdaptSuggestionsFilter" => Ok(PostFilter::AdaptSuggestions { ca: package == "ca" }),
         "DateCheckFilter" => {
             let dl = date_lang(&package)
                 .ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?;
@@ -1189,6 +1190,20 @@ fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result
             make_java(JClass::ConvertToGenderAndNumber, &["lemmaSelect"])
         }
         "PossessiusRedundantsFilter" => make_java(JClass::PossessiusRedundants, &[]),
+        "AdjustPronounsFilter" => make_java(JClass::AdjustPronouns, &[]),
+        "AdjustVerbSuggestionsFilter" => make_java(JClass::AdjustVerbSuggestions, &[]),
+        "AnarASuggestionsFilter" => make_java(JClass::AnarASuggestions, &[]),
+        "DonarTempsSuggestionsFilter" => make_java(JClass::DonarTempsSuggestions, &[]),
+        "OblidarseSugestionsFilter" => make_java(JClass::OblidarseSuggestions, &[]),
+        "PortarGerundiSuggestionsFilter" => make_java(JClass::PortarGerundiSuggestions, &[]),
+        "PortarTempsSuggestionsFilter" => make_java(JClass::PortarTempsSuggestions, &[]),
+        "ArabicMasdarToVerbFilter" => make_java(JClass::MasdarToVerbAr, &[]),
+        "ArabicVerbToMafoulMutlaqFilter" => make_java(JClass::VerbToMafoulMutlaqAr, &[]),
+        "ArabicAdjectiveToExclamationFilter" => make_java(JClass::AdjectiveToExclamationAr, &[]),
+        "AdverbFilter" => make_java(JClass::AdverbEn, &[]),
+        "ArabicDateCheckFilter" => {
+            make_java(JClass::DateCheck { lang: DateLang::Ar, with_suggestions: false }, &[])
+        }
         "InsertCommaFilter" if package == "de" => make_java(JClass::InsertCommaDe, &[]),
         "PotentialCompoundFilter" => make_java(JClass::PotentialCompoundDe, &[]),
         "PostponedAdjectiveConcordanceFilter" => match package.as_str() {
@@ -1291,6 +1306,23 @@ impl DisambiguationRule {
             antipatterns,
         });
 
+        // raw chunk tags for action="addchunk" (needs the plain strings,
+        // not interned PosIds)
+        let raw_chunk_tags: Vec<String> = data
+            .disambig
+            .word_datas
+            .as_ref()
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        structure::DisambiguationPart::WordData(w) => w.pos.clone(),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let word_datas: Vec<_> = if let Some(wds) = data.disambig.word_datas {
             wds.into_iter()
                 .map(|part| match part {
@@ -1354,6 +1386,14 @@ impl DisambiguationRule {
                     })
                     .collect(),
             )),
+            Some("addchunk") => {
+                // the chunk tag comes from the postag attribute or the wd list
+                let mut tags = raw_chunk_tags;
+                if let Some(postag) = data.disambig.postag.as_ref() {
+                    tags.push(postag.clone());
+                }
+                Ok(Disambiguation::AddChunk(tags))
+            }
             Some("ignore_spelling") => Ok(Disambiguation::Nop), // ignore_spelling can be ignored since we dont check spelling
             Some("immunize") => Ok(Disambiguation::Nop), // immunize can probably not be ignored
             Some("filterall") => {

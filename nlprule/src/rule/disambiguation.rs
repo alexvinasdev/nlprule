@@ -43,6 +43,9 @@ impl PosFilter {
 pub enum Disambiguation {
     Remove(Vec<either::Either<owned::WordData, PosFilter>>),
     Add(Vec<owned::WordData>),
+    /// `action="addchunk"`: add a chunk tag to each matched token
+    /// (mirrors `DisambiguationPatternRuleReplacer` ADDCHUNK).
+    AddChunk(Vec<String>),
     Replace(Vec<owned::WordData>),
     Filter(
         Vec<Option<either::Either<owned::WordData, PosFilter>>>,
@@ -126,6 +129,15 @@ impl Disambiguation {
 
                         token.word_mut().push(data);
                         token.word_mut().retain(|x| !x.pos().as_str().is_empty());
+                    }
+                }
+            }
+            Disambiguation::AddChunk(chunks) => {
+                for (group, chunk) in groups.into_iter().zip(chunks) {
+                    for token in group.into_iter() {
+                        if !token.chunks().contains(chunk) {
+                            token.chunks_mut().push(chunk.clone());
+                        }
                     }
                 }
             }

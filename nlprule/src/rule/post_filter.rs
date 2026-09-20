@@ -21,9 +21,10 @@ pub enum PostFilter {
     /// Mirrors `RegexAntiPatternFilter`: rejects the match if any regex matches
     /// the sentence text overlapping the match span.
     RegexAntiPattern { regexes: Vec<Regex> },
-    /// Mirrors `AdaptSuggestionsFilter` (`Language.adaptSuggestion`): adapts
-    /// the case of the replacements to the original error text.
-    AdaptSuggestions,
+    /// Mirrors `AdaptSuggestionsFilter` (`Language.adaptSuggestion`).
+    /// The base implementation is the identity; Catalan rewrites
+    /// contractions and apostrophes.
+    AdaptSuggestions { ca: bool },
     /// Mirrors `*SuppressMisspelledSuggestionsFilter`: drops replacements that
     /// are not in the analyzer dictionary (approximating LT's spellchecker check).
     /// If all replacements are dropped, the match is suppressed entirely
@@ -153,13 +154,17 @@ impl PostFilter {
                     message: None,
                 })
             }
-            PostFilter::AdaptSuggestions => {
-                // adapt the case of each replacement to the original error text,
-                // mirroring Language.adaptSuggestion's default behavior
-                let replacements = replacements
-                    .into_iter()
-                    .map(|replacement| adapt_case(&replacement, matched_text))
-                    .collect();
+            PostFilter::AdaptSuggestions { ca } => {
+                let replacements = if *ca {
+                    replacements
+                        .into_iter()
+                        .map(|replacement| {
+                            crate::rule::filter_java::ca_adapt_suggestion(&replacement)
+                        })
+                        .collect()
+                } else {
+                    replacements
+                };
 
                 Some(FilteredMatch {
                     span,

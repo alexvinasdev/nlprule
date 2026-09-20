@@ -154,56 +154,53 @@ tagger dictionaries in the LT distribution itself.
 
 | lang           | runnable   | passing   | lang   | runnable   | passing   |
 |----------------|------------|-----------|--------|------------|-----------|
-| ar             | 961        | 822       | km     | 44         | 11        |
+| ar             | 965        | 822       | km     | 44         | 11        |
 | ast            | 71         | 69        | lt     | 4          | 4         |
 | be             | 516        | 506       | ml     | 18         | 18        |
 | br | 665 | 476       | nl     | 1544       | 1492      |
-| ca | 14105 | 10310     | pl | 1842 | 1491      |
-| crh            | 93         | 17        | pt | 1969 | 954       |
+| ca | 14162 | 10663     | pl | 1842 | 1491      |
+| crh            | 93         | 17        | pt | 1969 | 953       |
 | da             | 78         | 61        | ro     | 1167       | 1116      |
 | de | 5477 | 5190      | ru | 1169 | 983       |
 | de-DE-x-simple | 92         | 40        | sk     | 206        | 184       |
 | el             | 98         | 95        | sl     | 85         | 82        |
-| en | 5703 | 4857      | sr     | 45         | 44        |
+| en | 5703 | 4858      | sr     | 45         | 44        |
 | eo | 416 | 127       | sv     | 31         | 29        |
-| es | 1796 | 1247      | ta     | 210        | 210       |
+| es | 1797 | 1404      | ta     | 210        | 210       |
 | fa             | 764        | 557       | tl     | 44         | 37        |
-| fr | 4951 | 3138      | uk | 10915 | 10683     |
+| fr | 4951 | 3137      | uk | 10915 | 10682     |
 | ga             | 3566       | 3292      | zh     | 1863       | 1520      |
 | gl | 298 | 204       | it | 131 | 124       |
 | ja             | 735        | 702       |        |            |           |
 
-Totals: ~53,000 runnable rules, ~43,600 passing their embedded LanguageTool
-examples (~82%). Highlights: uk 97.9%, be 98.1%, nl 96.6%, sr 97.8%, de 94.9%,
+Totals: ~53,000 runnable rules, ~44,200 passing their embedded LanguageTool
+examples (~83%). Highlights: uk 97.9%, be 98.1%, nl 96.6%, sr 97.8%, de 94.9%,
 ja 95.5% (lindera/ipadic), ro 95.6%, ta 100%, ga 92.3%, zh 81.6%, ru 84%,
-ar 85.5%, es 69.6%.
+ar 85.2%, es 78.1%, ca 75.3%.
 
 ### Live comparison against the LanguageTool HTTP server
 
-`build/compare_server.py` sends each language's embedded example sentences to a
-local instance of the official LanguageTool server (`HTTPServer` from the LT 6.5
-distribution) and to nlprule, and compares the rule IDs that fire per sentence:
+`build/compare_server.py` sends each language's embedded example sentences
+(unique, up to 1500 per language) to a local instance of the official
+LanguageTool 6.5 HTTP server and to nlprule, and compares the rule IDs that
+fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 
-| lang | sentences | agreed | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
-|------|-----------|--------|--------------|---------|--------------------|----------------|---------|
-| en | 5703 | 4857     | 0            | 10      | 1.00               | 0.76           | 0.83    |
-| de | 5477 | 5190     | 1            | 5       | 0.93               | 0.74           | 0.92    |
-| fr | 4951 | 3138     | 7            | 22      | 0.82               | 0.59           | 0.65    |
-| ca | 14105 | 10310     | 14           | 9       | 0.53               | 0.64           | 0.76    |
-| es | 1796 | 1247     | 7            | 12      | 0.83               | 0.74           | 0.81    |
-| it | 131 | 124     | 0            | 11      | 1.00               | 0.58           | 0.73    |
-| ru | 1169 | 983     | 1            | 12      | 0.96               | 0.65           | 0.73    |
-| pt | 1969 | 954     | 0            | 12      | 1.00               | 0.48           | 0.70    |
-| pl | 1842 | 1491      | 0            | 40      | 1.00               | 0.15           | 0.13    |
-| ro   | 40        | 19     | 1            | 19      | 0.95               | 0.50           | 0.53    |
-| br | 665 | 476      | 2            | 0       | 0.00               | 1.00           | 0.93    |
-| uk | 10915 | 10683     | 0            | 0       | 1.00               | 1.00           | 1.00    |
+| lang | sentences | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
+|------|-----------|--------------|---------|--------------------|----------------|---------|
+| de   | 1500      | 55           | 161     | 0.92               | 0.80           | 0.89    |
+| en   | 1500      | 50           | 397     | 0.92               | 0.59           | 0.74    |
+| ru   | 1046      | 68           | 243     | 0.91               | 0.73           | 0.77    |
+| ar   | 616       | 32           | 228     | 0.84               | 0.42           | 0.63    |
+| es   | 1500      | 115          | 219     | 0.87               | 0.78           | 0.86    |
+| pt   | 1500      | 78           | 488     | 0.89               | 0.57           | 0.68    |
+| uk   | 1457      | 170          | 409     | 0.81               | 0.64           | 0.72    |
+| fr   | 1500      | 185          | 448     | 0.72               | 0.51           | 0.70    |
+| ca   | 1500      | 311          | 493     | 0.59               | 0.48           | 0.66    |
 
-nlprule fires almost no rule that LT does not fire (precision 0.93-1.00 for most
-languages). The recall gap is dominated by rules that are pure Java classes in
-LT and have no XML representation (spellcheckers, `pl`'s stemmer-based rules,
-`en`'s chunker-based rules), which are out of scope of the XML conversion; plus
-the deep linguistic filters listed below. `uk` matches the server 100%.
+nlprule rarely fires rules that LT does not fire (precision 0.72-0.92). The
+recall gap is dominated by rules that are pure Java classes in LT with no XML
+representation (spellcheckers, `pl`'s stemmer-based rules, `en`'s chunker
+rules) and by the deep linguistic filters listed below.
 
 Language-specific notes:
 - `ja` uses lindera with the ipadic dictionary (the same dictionary data LT uses
@@ -231,13 +228,22 @@ Language-specific notes:
   RomanNumeral, RegularIrregularParticiple, ValidWord,
   RemoveUnknownCompounds, WhitespaceCheck, plus the English `+DT`/`+INDT`
   determiner synthesis of `EnglishSynthesizer`
-- Still unported (deep per-language linguistics): ca's pronoun/verb-morphology
-  filters (AdjustPronouns, Oblidarse, Portar*, DonarTemps, AnarA, ...),
-  fr InterrogativeVerb/MakeContractions/SuggestionsFilter/WordWithDeterminer,
-  es/ca/fr PostponedAdjectiveConcordance, pt Enclisis/Proclisis, the
-  NumberInWord/TextToNumber families, de InsertComma/PotentialCompound,
-  en AdverbFilter, ar verb filters, and `en`'s chunker (4.8k chunk references
-  in `grammar.xml` need a port of LT's regex chunker)
+- Also ported: ca's pronoun/verb-morphology filters (AdjustPronouns,
+  AdjustVerbSuggestions, AnarA, DonarTemps, Oblidarse, PortarGerundi,
+  PortarTemps, PronomsFeblesHelper with the full weak-pronoun transformation
+  tables), the Catalan synthesizer on its valencia dictionary with the
+  regional verb-variant fallback and PostagComparator,
+  `Catalan.adaptSuggestion`, ar MasdarToVerb/VerbToMafoulMutlaq/
+  AdjectiveToExclamation/ArabicDateCheck (with ArabicTagManager flag
+  arithmetic), en AdverbFilter, the disambiguation `addchunk` action (GV /
+  PTime chunks for ca+es), and `IsEnglishWordFilter` (approximated with a
+  frequency list of the 20k most common English words)
+- Still unported: `en`'s chunker (4.8k chunk references in `grammar.xml` need
+  a port of LT's OpenNLP chunker models; the runtime chunk matcher exists),
+  ar ArabicNumberPhraseFilter (needs ArabicNumbersWords), pt
+  BrazilianToponymFilter (LT `<regexp>` rules are a separate rule type),
+  WordWithDeterminer's `suggestionHasNoErrors` re-validation, and rules that
+  are pure Java in LT with no XML (spellers, pl stemmer rules)
 
 ### Performance vs the LanguageTool server
 

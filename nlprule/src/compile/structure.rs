@@ -614,6 +614,9 @@ pub struct Disambiguation {
 #[serde(deny_unknown_fields)]
 pub struct DisambiguationRule {
     pub pattern: Pattern,
+    /// `equivalence` elements (feature unification hints); parsed but unused.
+    #[serde(rename = "equivalence", default)]
+    pub equivalences: Option<Vec<serde::de::IgnoredAny>>,
     #[serde(rename = "antipattern")]
     pub antipatterns: Option<Vec<Pattern>>,
     #[serde(rename = "suggestion")]

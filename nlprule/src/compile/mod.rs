@@ -180,6 +180,7 @@ pub fn compile(
     // from the synth dictionary dump and the manual addition / removal lists
     let synth_kind = match lang_code.trim() {
         "de" => crate::rule::synthesizer::SynthesizerKind::German,
+        "ca" => crate::rule::synthesizer::SynthesizerKind::Catalan,
         _ => crate::rule::synthesizer::SynthesizerKind::Default,
     };
     let synthesizer = crate::rule::synthesizer::from_dumps(

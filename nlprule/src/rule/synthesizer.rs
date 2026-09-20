@@ -18,6 +18,9 @@ pub enum SynthesizerKind {
     Default,
     /// GermanSynthesizer: POS tag correction appends case information.
     German,
+    /// CatalanSynthesizer: verb synthesis over a valencia-variant dictionary,
+    /// falling back to central-variant verb tags when the base lookup is empty.
+    Catalan,
 }
 
 impl Default for SynthesizerKind {
@@ -110,6 +113,60 @@ impl Synthesizer {
     /// Mirrors `BaseSynthesizer.synthesize(token, posTag, true)`.
     /// The returned forms are deduplicated and sorted, like LanguageTool's TreeSet behavior.
     pub fn synthesize_regex(&self, lemma: &str, pos_regex: &Regex) -> Vec<String> {
+        if self.kind == SynthesizerKind::Catalan {
+            return self.synthesize_regex_catalan(lemma, pos_regex);
+        }
+        self.synthesize_regex_base(lemma, pos_regex)
+    }
+
+    /// Mirrors `CatalanSynthesizer.synthesize(token, posTag, true)`: regional
+    /// verb variants are encoded in the last tag character (the base dictionary
+    /// is the valencia one), so an empty first pass retries with the
+    /// central-variant (`ca-ES`) tag set. Lemmas with a space synthesize the
+    /// verb part and re-append the rest.
+    fn synthesize_regex_catalan(&self, lemma: &str, pos_regex: &Regex) -> Vec<String> {
+        const LEMMAS_TO_IGNORE: [&str; 4] = ["enterar", "sentar", "conseguir", "alcançar"];
+        if LEMMAS_TO_IGNORE.contains(&lemma) {
+            return Vec::new();
+        }
+        let pattern = pos_regex.as_str();
+        let (verb_lemma, add_after) = if pattern.starts_with('V') {
+            match lemma.find(' ') {
+                Some(i) => (&lemma[..i], Some(&lemma[i + 1..])),
+                None => (lemma, None),
+            }
+        } else {
+            (lemma, None)
+        };
+        let append = |mut results: Vec<String>| -> Vec<String> {
+            if let Some(rest) = add_after {
+                results = results
+                    .into_iter()
+                    .map(|form| format!("{} {}", form, rest))
+                    .collect();
+            }
+            results
+        };
+        let results = self.synthesize_regex_base(verb_lemma, pos_regex);
+        if !results.is_empty() {
+            return append(results);
+        }
+        // verbs whose last tag char encodes the regional variant
+        if pattern.starts_with('V')
+            && pattern
+                .chars()
+                .last()
+                .map(|c| "CVBXYZ0123456".contains(c))
+                .unwrap_or(false)
+        {
+            let variant = format!("{}[0CXY12]", &pattern[..pattern.len() - 1]);
+            let results = self.synthesize_regex_base(verb_lemma, &Regex::new(variant));
+            return append(results);
+        }
+        append(results)
+    }
+
+    fn synthesize_regex_base(&self, lemma: &str, pos_regex: &Regex) -> Vec<String> {
         use fst::{IntoStreamer, Streamer};
 
         let mut results = Vec::new();
@@ -152,21 +209,26 @@ impl Synthesizer {
     }
 
     /// Mirrors `BaseSynthesizer.getTargetPosTag`: by default, the last of the
-    /// matched POS tags is returned.
+    /// matched POS tags is returned. The Catalan synthesizer sorts the tags
+    /// with `PostagComparator` first (3rd person > 1st, indicative > other
+    /// moods).
     pub fn get_target_pos_tag(&self, pos_tags: &[&str], target_pos_tag: &str) -> String {
         if pos_tags.is_empty() {
-            target_pos_tag.to_string()
-        } else {
-            // return the last one to keep the previous results
-            pos_tags[pos_tags.len() - 1].to_string()
+            return target_pos_tag.to_string();
         }
+        if self.kind == SynthesizerKind::Catalan {
+            let mut sorted: Vec<&str> = pos_tags.to_vec();
+            sorted.sort_by(|a, b| postag_comparator(a, b));
+            return sorted[sorted.len() - 1].to_string();
+        }
+        // return the last one to keep the previous results
+        pos_tags[pos_tags.len() - 1].to_string()
     }
 
     /// Mirrors `BaseSynthesizer.getPosTagCorrection` (and overrides e.g. in German).
     pub fn pos_tag_correction(&self, pos_tag: String) -> String {
         match self.kind {
-            SynthesizerKind::German => pos_tag,
-            SynthesizerKind::Default => pos_tag,
+            SynthesizerKind::German | SynthesizerKind::Default | SynthesizerKind::Catalan => pos_tag,
         }
     }
 
@@ -313,6 +375,41 @@ mod build {
 
 #[cfg(feature = "compile")]
 pub(crate) use build::from_dumps;
+
+/// `CatalanSynthesizer.PostagComparator`: gives priority to 3rd person over
+/// 1st and to the indicative over other moods.
+fn postag_comparator(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let ca: Vec<char> = a.chars().collect();
+    let cb: Vec<char> = b.chars().collect();
+    if ca.len() > 4 && cb.len() > 4 {
+        if a.contains("3S") && b == "1S" {
+            return Ordering::Greater;
+        }
+        if a.contains("1S") && b.contains("3S") {
+            return Ordering::Less;
+        }
+        if a == "VMIP2P00" && b == "VMIS3S00" {
+            return Ordering::Greater;
+        }
+        if b == "VMIP2P00" && a == "VMIS3S00" {
+            return Ordering::Less;
+        }
+        if ca[2] == 'I' && cb[2] != 'I' {
+            return Ordering::Greater;
+        }
+        if cb[2] == 'I' && ca[2] != 'I' {
+            return Ordering::Less;
+        }
+        if ca[4] == '3' && cb[4] == '1' {
+            return Ordering::Greater;
+        }
+        if cb[4] == '1' && ca[4] == '3' {
+            return Ordering::Less;
+        }
+    }
+    Ordering::Equal
+}
 
 #[cfg(test)]
 mod tests {

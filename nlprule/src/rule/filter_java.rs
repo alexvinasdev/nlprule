@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateLang {
     En,
+    Ar,
     De,
     Fr,
     Es,
@@ -117,6 +118,17 @@ pub enum JClass {
     PostponedAdjective {
         lang: PostponedAdjLang,
     },
+    AdjustPronouns,
+    AdjustVerbSuggestions,
+    AnarASuggestions,
+    DonarTempsSuggestions,
+    OblidarseSuggestions,
+    PortarGerundiSuggestions,
+    PortarTempsSuggestions,
+    MasdarToVerbAr,
+    VerbToMafoulMutlaqAr,
+    AdjectiveToExclamationAr,
+    AdverbEn,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,6 +560,21 @@ impl JClass {
             JClass::PostponedAdjective { lang } => {
                 postponed_adjective(ctx, *lang, replacements)
             }
+            JClass::AdjustPronouns => adjust_pronouns(ctx, replacements),
+            JClass::AdjustVerbSuggestions => {
+                adjust_verb_suggestions(ctx, replacements)
+            }
+            JClass::AnarASuggestions => anar_a_suggestions(ctx, replacements),
+            JClass::DonarTempsSuggestions => donar_temps_suggestions(ctx, replacements),
+            JClass::OblidarseSuggestions => olidarse_suggestions(ctx, replacements),
+            JClass::PortarGerundiSuggestions => {
+                portar_gerundi_suggestions(ctx, replacements)
+            }
+            JClass::PortarTempsSuggestions => portar_temps_suggestions(ctx, replacements),
+            JClass::MasdarToVerbAr => ar_masdar_to_verb(ctx, replacements),
+            JClass::VerbToMafoulMutlaqAr => ar_verb_to_mafoul_mutlaq(ctx, replacements),
+            JClass::AdjectiveToExclamationAr => ar_adjective_to_exclamation(ctx, replacements),
+            JClass::AdverbEn => adverb_filter_en(ctx, replacements),
             JClass::RemoveUnknownCompounds => {
                 let compound = format!(
                     "{}{}",
@@ -842,6 +869,14 @@ mod date {
         let starts = |p: &str| day.starts_with(p);
         let eq = |p: &str| day == p;
         Some(match lang {
+            DateLang::Ar if day == "السبت" => 7,
+            DateLang::Ar if day == "الأحد" => 1,
+            DateLang::Ar if day == "الإثنين" || day == "الاثنين" => 2,
+            DateLang::Ar if day == "الثلاثاء" => 3,
+            DateLang::Ar if day == "الأربعاء" => 4,
+            DateLang::Ar if day == "الخميس" => 5,
+            DateLang::Ar if day == "الجمعة" => 6,
+
             DateLang::En if starts("su") => 1,
             DateLang::En if starts("mo") => 2,
             DateLang::En if starts("tu") => 3,
@@ -965,6 +1000,19 @@ mod date {
         let starts = |p: &str| mon.starts_with(p);
         let eq = |p: &str| mon == p;
         Some(match lang {
+            DateLang::Ar if eq("كانون الثاني") || eq("كانون ثاني") || eq("يناير") || eq("جانفي") || eq("جانفييه") => 1,
+            DateLang::Ar if eq("شباط") || eq("فبراير") || eq("فيفري") => 2,
+            DateLang::Ar if eq("آذار") || eq("مارس") => 3,
+            DateLang::Ar if eq("نيسان") || eq("أبريل") || eq("أفريل") => 4,
+            DateLang::Ar if eq("أيار") || eq("مايو") || eq("ماي") => 5,
+            DateLang::Ar if eq("حزيران") || eq("يونيو") || eq("جوان") => 6,
+            DateLang::Ar if eq("تموز") || eq("يوليو") || eq("جويلية") => 7,
+            DateLang::Ar if eq("آب") || eq("أغسطس") || eq("أوت") => 8,
+            DateLang::Ar if eq("أيلول") || eq("سبتمبر") => 9,
+            DateLang::Ar if eq("تشرين الأول") => 10,
+            DateLang::Ar if eq("تشرين الثاني") || eq("تشرين ثاني") || eq("نوفمبر") => 11,
+            DateLang::Ar if eq("كانون الأول") || eq("كانون أول") || eq("ديسمبر") => 12,
+
             DateLang::En if starts("jan") => 1,
             DateLang::En if starts("feb") => 2,
             DateLang::En if starts("mar") => 3,
@@ -1307,8 +1355,18 @@ mod date {
             "vendredo",
             "sabato",
         ];
+        const AR: [&str; 7] = [
+            "الأحد",
+            "الاثنين",
+            "الثلاثاء",
+            "الأربعاء",
+            "الخميس",
+            "الجمعة",
+            "السبت",
+        ];
         let idx = dow.saturating_sub(1) as usize;
         match lang {
+            DateLang::Ar => AR[idx],
             DateLang::En => EN[idx],
             DateLang::De => DE[idx],
             DateLang::Fr => FR[idx],
@@ -4226,7 +4284,7 @@ fn convert_to_gender_and_number(ctx: &mut FilterCtx, replacements: Vec<String>) 
                 let has_special = token.word().tags().iter().any(|d| {
                     let p = d.pos().as_str();
                     p == "_perfet" || p == "_GV_"
-                });
+                }) || token.chunks().iter().any(|c| c == "GV");
                 let atr = if has_special {
                     None
                 } else {
@@ -4422,16 +4480,9 @@ fn possessius_redundants(ctx: &mut FilterCtx, replacements: Vec<String>) -> Opti
     let number = chars.get(6).map(|c| c.to_string()).unwrap_or_default();
     let persona = chars.get(2).map(|c| c.to_string()).unwrap_or_default();
 
-    // LT walks left over chunk-tagged GV tokens; without a ca chunker the
-    // walk stops immediately
+    // LT walks left over chunk-tagged GV tokens
     let mut pos_verb = ctx.pattern_token_pos().saturating_sub(1);
-    while pos_verb > 0
-        && tokens[pos_verb]
-            .word()
-            .tags()
-            .iter()
-            .any(|d| d.pos().as_str() == "_GV_")
-    {
+    while pos_verb > 0 && tokens[pos_verb].chunks().iter().any(|c| c == "GV") {
         pos_verb -= 1;
     }
     pos_verb += 1;
@@ -5165,4 +5216,2762 @@ fn postponed_adjective(
         keep(ctx, suggestions)
     }
     .or_else(|| keep(ctx, replacements))
+}
+
+// ===== Catalan verb / clitic-pronoun filters (PronomsFeblesHelper port) =====
+
+/// `PronomsFeblesHelper.pronomsFebles`: groups of 6 forms, one per
+/// PronounPosition (DAVANT, DAVANT_APOS, DARRERE, DARRERE_APOS,
+/// DARRERE_NOGUIONET_NOAPOS, DARRE_APOS_NOGUIONET_NOAPOS).
+const PRONOMS_FEBLES: [&str; 498] = [
+    "el", "l'", "-lo", "'l", "lo", "l", "els el", "els l'", "-los-el", "'ls-el", "losel", "lsel",
+    "els els", "els els", "-los-els", "'ls-els", "losels", "lsels", "els en", "els n'", "-los-en",
+    "'ls-en", "losen", "lsen", "els hi", "els hi", "-los-hi", "'ls-hi", "loshi", "lshi", "els ho",
+    "els ho", "-los-ho", "'ls-ho", "losho", "lsho", "els la", "els l'", "-los-la", "'ls-la",
+    "losla", "lsla", "els les", "els les", "-los-les", "'ls-les", "losles", "lsles", "els", "els",
+    "-los", "'ls", "los", "ls", "em", "m'", "-me", "'m", "me", "m", "en", "n'", "-ne", "'n", "ne",
+    "n", "ens el", "ens l'", "-nos-el", "'ns-el", "nosel", "nsel", "ens els", "ens els", "-nos-els",
+    "'ns-els", "nosels", "nsels", "ens en", "ens n'", "-nos-en", "'ns-en", "nosen", "nsen", "ens hi",
+    "ens hi", "-nos-hi", "'ns-hi", "noshi", "nshi", "ens ho", "ens ho", "-nos-ho", "'ns-ho",
+    "nosho", "nsho", "ens la", "ens l'", "-nos-la", "'ns-la", "nosla", "nsla", "ens les",
+    "ens les", "-nos-les", "'ns-les", "nosles", "nsles", "ens li", "ens li", "-nos-li", "'ns-li",
+    "nosli", "nsli", "ens", "ens", "-nos", "'ns", "nos", "ns", "es", "s'", "-se", "'s", "se", "s",
+    "et", "t'", "-te", "'t", "te", "t", "hi", "hi", "-hi", "-hi", "hi", "hi", "ho", "ho", "-ho",
+    "-ho", "ho", "ho", "l'en", "el n'", "-l'en", "-l'en", "len", "len", "l'hi", "l'hi", "-l'hi",
+    "-l'hi", "lhi", "lhi", "la hi", "la hi", "-la-hi", "-la-hi", "lahi", "lahi", "la", "l'", "-la",
+    "-la", "la", "la", "la'n", "la n'", "-la'n", "-la'n", "lan", "lan", "les en", "les n'",
+    "-les-en", "-les-en", "lesen", "lesen", "les hi", "les hi", "-les-hi", "-les-hi", "leshi",
+    "leshi", "les", "les", "-les", "-les", "les", "les", "li hi", "li hi", "-li-hi", "-li-hi",
+    "lihi", "lihi", "li ho", "li ho", "-li-ho", "-li-ho", "liho", "liho", "li la", "li l'",
+    "-li-la", "-li-la", "lila", "lila", "li les", "li les", "-li-les", "-li-les", "liles", "liles",
+    "li", "li", "-li", "-li", "li", "li", "li'l", "li l'", "-li'l", "-li'l", "lil", "lil", "li'ls",
+    "li'ls", "-li'ls", "-li'ls", "lils", "lils", "li'n", "li n'", "-li'n", "-li'n", "lin", "lin",
+    "m'hi", "m'hi", "-m'hi", "-m'hi", "mhi", "mhi", "m'ho", "m'ho", "-m'ho", "-m'ho", "mho", "mho",
+    "me la", "me l'", "-me-la", "-me-la", "mela", "mela", "me les", "me les", "-me-les",
+    "-me-les", "meles", "meles", "me li", "me li", "-me-li", "-me-li", "meli", "meli", "me'l",
+    "me l'", "-me'l", "-me'l", "mel", "mel", "me'ls", "me'ls", "-me'ls", "-me'ls", "mels", "mels",
+    "me'n", "me n'", "-me'n", "-me'n", "men", "men", "n'hi", "n'hi", "-n'hi", "-n'hi", "nhi",
+    "nhi", "s'hi", "s'hi", "-s'hi", "-s'hi", "shi", "shi", "s'ho", "s'ho", "-s'ho", "-s'ho",
+    "sho", "sho", "se la", "se l'", "-se-la", "-se-la", "sela", "sela", "se les", "se les",
+    "-se-les", "-se-les", "seles", "seles", "se li", "se li", "-se-li", "-se-li", "seli", "seli",
+    "se us", "se us", "-se-us", "-se-us", "seus", "seus", "se vos", "se vos", "-se-vos",
+    "-se-vos", "sevos", "sevos", "se'l", "se l'", "-se'l", "-se'l", "sel", "sel", "se'ls",
+    "se'ls", "-se'ls", "-se'ls", "sels", "sels", "se'm", "se m'", "-se'm", "-se'm", "sem", "sem",
+    "se'n", "se n'", "-se'n", "-se'n", "sen", "sen", "se'ns", "se'ns", "-se'ns", "-se'ns", "sens",
+    "sens", "se't", "se t'", "-se't", "-se't", "set", "set", "t'hi", "t'hi", "-t'hi", "-t'hi",
+    "thi", "thi", "t'ho", "t'ho", "-t'ho", "-t'ho", "tho", "tho", "te la", "te l'", "-te-la",
+    "-te-la", "tela", "tela", "te les", "te les", "-te-les", "-te-les", "teles", "teles",
+    "te li", "te li", "-te-li", "-te-li", "teli", "teli", "te'l", "te l'", "-te'l", "-te'l",
+    "tel", "tel", "te'ls", "te'ls", "-te'ls", "-te'ls", "tels", "tels", "te'm", "te m'", "-te'm",
+    "-te'm", "tem", "tem", "te'n", "te n'", "-te'n", "-te'n", "ten", "ten", "te'ns", "te'ns",
+    "-te'ns", "-te'ns", "tens", "tens", "us el", "us l'", "-vos-el", "-us-el", "vosel", "usel",
+    "us els", "us els", "-vos-els", "-us-els", "vosels", "usels", "us em", "us m'", "-vos-em",
+    "-us-em", "vosem", "usem", "us en", "us n'", "-vos-en", "-us-en", "vosen", "usen", "us ens",
+    "us ens", "-vos-ens", "-us-ens", "vosens", "usens", "us hi", "us hi", "-vos-hi", "-us-hi",
+    "voshi", "ushi", "us ho", "us ho", "-vos-ho", "-us-ho", "vosho", "usho", "us la", "us l'",
+    "-vos-la", "-us-la", "vosla", "usla", "us les", "us les", "-vos-les", "-us-les", "vosles",
+    "usles", "us li", "us li", "-vos-li", "-us-li", "vosli", "usli", "us", "us", "-vos", "-us",
+    "vos", "us",
+];
+
+#[derive(Clone, Copy, PartialEq)]
+enum PronounPosition {
+    Davant = 0,
+    DavantApos = 1,
+    Darrere = 2,
+    DarrereApos = 3,
+}
+
+fn transform_pronoun(input_pronom: &str, pos: PronounPosition) -> String {
+    let mut i = 0;
+    while i < PRONOMS_FEBLES.len() && !input_pronom.eq_ignore_ascii_case(PRONOMS_FEBLES[i]) {
+        i += 1;
+    }
+    if i >= PRONOMS_FEBLES.len() {
+        return input_pronom.to_string();
+    }
+    let pf_pos = 6 * (i / 6) + pos as usize;
+    if pf_pos > PRONOMS_FEBLES.len() - 1 {
+        // nonexistent pronoun, e.g. -t
+        return String::new();
+    }
+    let pronom = PRONOMS_FEBLES[pf_pos];
+    if pos == PronounPosition::Davant || (pos == PronounPosition::DavantApos && !pronom.ends_with('\''))
+    {
+        format!("{} ", pronom)
+    } else {
+        pronom.to_string()
+    }
+}
+
+fn apostrophe_needed(word: &str) -> bool {
+    matches_full(
+        &Regex::new("(?i)h?[aeiouàèéíòóú].*".to_string()),
+        word,
+    )
+}
+
+fn apostrophe_needed_end(word: &str) -> bool {
+    matches_full(&Regex::new("(?i).*[aei]".to_string()), word)
+}
+
+fn transform_davant(input_pronom: &str, next_word: &str) -> String {
+    if apostrophe_needed(next_word) {
+        transform_pronoun(input_pronom, PronounPosition::DavantApos)
+    } else {
+        transform_pronoun(input_pronom, PronounPosition::Davant)
+    }
+}
+
+fn transform_darrere(input_pronom: &str, previous_word: &str) -> String {
+    if apostrophe_needed_end(previous_word) {
+        transform_pronoun(input_pronom, PronounPosition::DarrereApos)
+    } else {
+        transform_pronoun(input_pronom, PronounPosition::Darrere)
+    }
+}
+
+fn dative_pronoun(persona_number: &str) -> Option<&'static str> {
+    match persona_number {
+        "1S" => Some("em"),
+        "2S" => Some("et"),
+        "3S" | "3C" => Some("li"),
+        "1P" => Some("ens"),
+        "2P" => Some("us"),
+        "3P" => Some("els"),
+        _ => None,
+    }
+}
+
+fn add_en_apostrophe(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "m'" => "me n'",
+        "t'" => "te n'",
+        "s'" => "se n'",
+        "ens" => "ens n'",
+        "us" => "us n'",
+        "vos" => "vos n'",
+        "li" => "li n'",
+        "els" => "els n'",
+        "se m'" => "se me n'",
+        "se t'" => "se te n'",
+        "se li" => "se li n'",
+        "se'ns" => "se'ns n'",
+        "se us" => "se us n'",
+        "se vos" => "se vos n'",
+        "se'ls" => "se'ls n'",
+        "hi" => "n'hi ",
+        "" => "n'",
+        _ => return None,
+    })
+}
+
+fn add_en(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "em" => "me'n ",
+        "et" => "te'n ",
+        "es" | "se" => "se'n ",
+        "ens" => "ens en ",
+        "us" => "us en ",
+        "li" => "li'n ",
+        "els" => "els en ",
+        "se'm" => "se me'n ",
+        "se't" => "se te'n ",
+        "se li" => "se li'n ",
+        "se'ns" => "se'ns en ",
+        "se us" => "se us en ",
+        "se vos" => "se vos en ",
+        "se'ls" => "se'ls en ",
+        "hi" => "n'hi ",
+        "" => "en ",
+        _ => return None,
+    })
+}
+
+fn add_hi_map(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "em" => "m'hi",
+        "et" => "t'hi",
+        "es" | "se" => "s'hi",
+        "ens" => "ens hi",
+        "us" => "us hi",
+        "li" => "li hi",
+        "els" => "els hi",
+        "" => "hi",
+        _ => return None,
+    })
+}
+
+fn remove_reflexive(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "em" | "me" | "m'" | "et" | "te" | "t'" | "es" | "se" | "s'" | "ens" | "us" | "vos" => "",
+        "se'm" | "se m'" => "em",
+        "se't" => "et",
+        "se t'" => "t'",
+        "se l'" => "l'",
+        "se la" => "la",
+        "se li" => "li",
+        "se'ns" => "ens",
+        "se us" => "us",
+        "se'ls" => "els",
+        "s'ho" | "m'ho" | "t'ho" | "ens ho" | "us ho" | "vos ho" => "ho",
+        "-me'l" | "-te'l" | "-se'l" | "-vos-el" | "-nos-el" => "-lo",
+        "-me-la" | "-te-la" | "-se-la" | "-vos-la" | "-nos-la" => "-la",
+        "-m'ho" | "-t'ho" | "-s'ho" | "-vos-ho" | "-nos-ho" => "-ho",
+        _ => return None,
+    })
+}
+
+fn add_reflexive_vowel(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "1S" => "m'",
+        "2S" => "t'",
+        "3S" => "s'",
+        "1P" => "ens ",
+        "2P" => "us ",
+        "3P" => "s'",
+        _ => return None,
+    })
+}
+
+fn add_reflexive_consonant(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "1S" => "em ",
+        "2S" => "et ",
+        "3S" => "es ",
+        "1P" => "ens ",
+        "2P" => "us ",
+        "3P" => "es ",
+        _ => return None,
+    })
+}
+
+fn add_reflexive_imperative(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "2S" => "'t",
+        "3S" => "'s",
+        "1P" => "-nos",
+        "2P" => "-vos",
+        "3P" => "-se",
+        _ => return None,
+    })
+}
+
+fn add_es_en(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "m'" | "em" | "me" => "se me'n ",
+        "t'" | "et" | "te" => "se te'n ",
+        "li" => "se li'n ",
+        "ens" => "se'ns en ",
+        "us" => "se us en ",
+        "vos" => "se vos en ",
+        "els" => "se'ls en ",
+        _ => return None,
+    })
+}
+
+fn add_es_en_apostrophe(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "m'" | "em" | "me" => "se me n'",
+        "t'" | "et" | "te" => "se te n'",
+        "li" => "se li n'",
+        "ens" => "se'ns n'",
+        "us" => "se us n'",
+        "vos" => "se vos n'",
+        "els" => "se'ls n'",
+        _ => return None,
+    })
+}
+
+fn contains_reflexive_pronoun(pronouns: &str) -> bool {
+    matches_full(
+        &Regex::new("(?i).*([mts][e']|[e'][mts]|vos|us|ens|-nos|-vos).*".to_string()),
+        pronouns,
+    )
+}
+
+/// `PronomsFeblesHelper.pronomFeble`
+const PRONOM_FEBLE_RE: &str = "P0.{6}|PP3CN000|PP3NN000|PP3..A00|PP[123]CP000|PP3CSD00";
+/// `AdjustPronounsFilter.isPronoun` (slightly different variant set)
+const IS_PRONOUN_RE: &str = "P0.{6}|PP3CN000|PP3NN000|PP3..A00|PP3CP000|PP3CSD00";
+
+fn tok_matches_posre(token: &Token, pattern: &str) -> bool {
+    let re = Regex::new(pattern.to_string());
+    token
+        .word()
+        .tags()
+        .iter()
+        .any(|d| matches_full(&re, d.pos().as_str()))
+}
+
+fn tok_has_pos_start(token: &Token, prefix: &str) -> bool {
+    token
+        .word()
+        .tags()
+        .iter()
+        .any(|d| d.pos().as_str().starts_with(prefix))
+}
+
+fn tok_has_any_lemma(token: &Token, lemmas: &[&str]) -> bool {
+    token
+        .word()
+        .tags()
+        .iter()
+        .any(|d| lemmas.contains(&d.lemma().as_str()))
+}
+
+fn tok_first_reading(token: &Token) -> Option<(String, String)> {
+    token
+        .word()
+        .tags()
+        .iter()
+        .next()
+        .map(|d| (d.lemma().as_str().to_string(), d.pos().as_str().to_string()))
+}
+
+/// char-safe postag substring [a, b)
+fn postag_sub(tag: &str, a: usize, b: usize) -> String {
+    let chars: Vec<char> = tag.chars().collect();
+    if chars.len() < b {
+        return String::new();
+    }
+    chars[a..b].iter().collect()
+}
+
+/// First token at/after the match start (LT's `posWord` walk, index 0 being
+/// the SENT_START token).
+fn pos_word_start(ctx: &FilterCtx, tokens: &[&Token]) -> usize {
+    let mut pos_word = 0;
+    while pos_word < tokens.len()
+        && (pos_word == 0 || tokens[pos_word].span().char().start < ctx.span.char().start)
+    {
+        pos_word += 1;
+    }
+    pos_word
+}
+
+/// The shared left walk of `AdjustPronounsFilter` / `AdjustVerbSuggestionsFilter`.
+/// LT walks left over pronouns and the verbal group (GV chunk tags, set by
+/// the ca/es disambiguator via `action="addchunk"`).
+struct VerbWalk {
+    pos_word: usize,
+    to_left: usize,
+    first_verb: String,
+    first_verb_pos: usize,
+    first_verb_inflected: bool,
+    persona_number: String,
+    persona_number_imperative: String,
+    replacement_verb: String,
+}
+
+fn verb_walk(
+    _ctx: &FilterCtx,
+    tokens: &[&Token],
+    pos_word: usize,
+    synth: Option<&Synthesizer>,
+    new_lemma: Option<&str>,
+) -> VerbWalk {
+    let mut walk = VerbWalk {
+        pos_word,
+        to_left: 0,
+        first_verb: String::new(),
+        first_verb_pos: 0,
+        first_verb_inflected: false,
+        persona_number: String::new(),
+        persona_number_imperative: String::new(),
+        replacement_verb: String::new(),
+    };
+    // change lemma if asked (only at the matched token)
+    if let (Some(synth), Some(new_lemma)) = (synth, new_lemma) {
+        let postags: Vec<String> = tokens[pos_word]
+            .word()
+            .tags()
+            .iter()
+            .filter(|d| d.pos().as_str().starts_with('V'))
+            .map(|d| d.pos().as_str().to_string())
+            .collect();
+        let postag_refs: Vec<&str> = postags.iter().map(|s| s.as_str()).collect();
+        let target_postag = synth.get_target_pos_tag(&postag_refs, "");
+        if !target_postag.is_empty() {
+            let forms = synth.synthesize_regex(new_lemma, &Regex::new(target_postag));
+            if let Some(form) = forms.first() {
+                walk.replacement_verb = form.clone();
+            }
+        }
+    }
+    let mut done = false;
+    let mut in_pronouns = false;
+    while !done && pos_word > walk.to_left {
+        let current = tokens[pos_word - walk.to_left];
+        let is_verb = tok_has_pos_start(current, "V");
+        let is_pronoun = tok_matches_posre(current, IS_PRONOUN_RE);
+        let is_in_gv = current.chunks().iter().any(|c| c == "GV");
+        if is_pronoun {
+            in_pronouns = true;
+        }
+        let accept = is_pronoun
+            || (is_verb
+                && !in_pronouns
+                && !walk.first_verb_inflected
+                && (walk.to_left == 0 || is_in_gv))
+            || (is_in_gv && !walk.first_verb_inflected);
+        if accept {
+            if is_verb {
+                walk.first_verb = current.word().as_str().to_string();
+                walk.first_verb_pos = walk.to_left;
+                walk.first_verb_inflected = tok_matches_posre(current, "V.[SI].*");
+                if walk.first_verb_inflected {
+                    if let Some((_, _, pos)) = reading_with_tag_regex(current, "V.[SI].*") {
+                        walk.persona_number = postag_sub(&pos, 4, 6);
+                    }
+                }
+                if tok_matches_posre(current, "V.M.*") {
+                    if let Some((_, _, pos)) = reading_with_tag_regex(current, "V.M.*") {
+                        walk.persona_number_imperative = postag_sub(&pos, 4, 6);
+                    }
+                }
+            }
+            walk.to_left += 1;
+        } else {
+            done = true;
+            if walk.to_left > 0 {
+                walk.to_left -= 1;
+            }
+        }
+    }
+    if pos_word == walk.to_left {
+        // avoid the SENT_START token
+        walk.to_left -= 1;
+    }
+    walk
+}
+
+/// pronouns in front of the verb (tokens in `[pos_word - to_left, pos_word - first_verb_pos)`)
+fn build_pronouns_str(tokens: &[&Token], walk: &VerbWalk) -> String {
+    let mut sb = String::new();
+    let mut i = walk.pos_word.saturating_sub(walk.to_left);
+    let end = walk.pos_word.saturating_sub(walk.first_verb_pos);
+    while i < end {
+        sb.push_str(tokens[i].word().as_str());
+        if i + 1 < tokens.len() && tokens[i + 1].has_space_before() {
+            sb.push(' ');
+        }
+        i += 1;
+    }
+    sb.trim().to_string()
+}
+
+fn build_verb_str(tokens: &[&Token], walk: &VerbWalk) -> String {
+    let mut sb = String::new();
+    let mut i = walk.pos_word.saturating_sub(walk.first_verb_pos);
+    while i <= walk.pos_word {
+        if i == walk.pos_word && !walk.replacement_verb.is_empty() {
+            sb.push_str(&walk.replacement_verb);
+        } else {
+            sb.push_str(tokens[i].word().as_str());
+        }
+        if i + 1 < tokens.len() && tokens[i + 1].has_space_before() {
+            sb.push(' ');
+        }
+        i += 1;
+    }
+    sb.trim().to_string()
+}
+
+/// `PronomsFeblesHelper.getTwoNextPronouns`: up to two clitic pronouns
+/// attached after `from` (no whitespace between them).
+fn get_two_next_pronouns(tokens: &[&Token], from: usize) -> (String, usize) {
+    let mut pronoms = String::new();
+    let mut num_pronouns = 0usize;
+    if from < tokens.len() && !tokens[from].has_space_before() {
+        if let Some(at) = reading_with_tag_regex(tokens[from], PRONOM_FEBLE_RE) {
+            pronoms.push_str(&at.0);
+            num_pronouns += 1;
+            if from + 1 < tokens.len() && !tokens[from + 1].has_space_before() {
+                if let Some(at2) = reading_with_tag_regex(tokens[from + 1], PRONOM_FEBLE_RE) {
+                    pronoms.push_str(&at2.0);
+                    num_pronouns += 1;
+                }
+            }
+        }
+    }
+    (pronoms, num_pronouns)
+}
+
+/// `PronomsFeblesHelper.getPreviousPronouns`: clitic pronouns attached before
+/// `to_index` (up to the governing infinitive / gerund / imperative).
+fn get_previous_pronouns(tokens: &[&Token], to_index: usize) -> (String, usize) {
+    let mut from_index = to_index;
+    let mut num_pronouns = 0usize;
+    let mut done = false;
+    while from_index > 0 && !done {
+        if reading_with_tag_regex(tokens[from_index], PRONOM_FEBLE_RE).is_some() {
+            if from_index > 1
+                && !tokens[from_index].has_space_before()
+                && reading_with_tag_regex(tokens[from_index - 1], "V.[GNM].*").is_some()
+            {
+                done = true;
+            } else if from_index > 2
+                && !tokens[from_index].has_space_before()
+                && !tokens[from_index - 1].has_space_before()
+                && reading_with_tag_regex(tokens[from_index - 1], PRONOM_FEBLE_RE).is_some()
+                && reading_with_tag_regex(tokens[from_index - 2], "V.[GNM].*").is_some()
+            {
+                done = true;
+            }
+            if !done {
+                from_index -= 1;
+                num_pronouns += 1;
+            }
+        } else {
+            done = true;
+        }
+    }
+    let mut pronouns = String::new();
+    if num_pronouns > 0 {
+        for j in from_index + 1..=to_index {
+            if j > from_index + 1 && tokens[j].has_space_before() {
+                pronouns.push(' ');
+            }
+            pronouns.push_str(tokens[j].word().as_str());
+        }
+    }
+    (pronouns, num_pronouns)
+}
+
+fn do_add_pronoun_en(first_verb: &str, pronouns_str: &str, verb_str: &str) -> String {
+    let transform = if apostrophe_needed(first_verb) {
+        add_en_apostrophe
+    } else {
+        add_en
+    };
+    match transform(&pronouns_str.to_lowercase()) {
+        Some(pr) => format!("{}{}", pr, verb_str.to_lowercase()),
+        None => String::new(),
+    }
+}
+
+fn do_add_pronoun_hi(pronouns_str: &str, verb_str: &str) -> String {
+    match add_hi_map(&pronouns_str.to_lowercase()) {
+        Some(pr) => format!("{} {}", pr, verb_str.to_lowercase()),
+        None => String::new(),
+    }
+}
+
+fn do_remove_pronoun_reflexive(
+    pronouns_str: &str,
+    verb_str: &str,
+    pronouns_after: bool,
+) -> String {
+    let pr = remove_reflexive(&pronouns_str.to_lowercase());
+    if pronouns_after {
+        return match pr {
+            Some(pr) => format!("{}{}", verb_str, pr),
+            None => verb_str.to_string(),
+        };
+    }
+    match pr {
+        Some(pr) => format!("{} {}", pr, verb_str)
+            .trim()
+            .replace("' ", "'"),
+        None => verb_str.to_string(),
+    }
+}
+
+fn do_add_pronoun_reflexive(
+    pronouns_str: &str,
+    verb_str: &str,
+    persona_number: &str,
+    pronouns_after: bool,
+) -> String {
+    if pronouns_after {
+        if contains_reflexive_pronoun(&pronouns_str.to_lowercase()) {
+            return format!("{}{}", verb_str, pronouns_str);
+        }
+        if verb_str.ends_with('r') || verb_str.ends_with("re") {
+            return format!("{}{}", verb_str, transform_darrere("-se", verb_str));
+        }
+        return verb_str.to_string();
+    }
+    if pronouns_str.is_empty() {
+        let pronoun = if apostrophe_needed(verb_str) {
+            add_reflexive_vowel(persona_number)
+        } else {
+            add_reflexive_consonant(persona_number)
+        };
+        return match pronoun {
+            Some(p) => format!("{}{}", p, verb_str).trim().replace("' ", "'"),
+            None => String::new(),
+        };
+    }
+    format!("{} {}", pronouns_str, verb_str)
+        .trim()
+        .replace("' ", "'")
+}
+
+fn do_add_pronoun_reflexive_en(
+    pronouns_str: &str,
+    verb_str: &str,
+    persona_number: &str,
+    pronouns_after: bool,
+) -> String {
+    if pronouns_after {
+        if contains_reflexive_pronoun(&pronouns_str.to_lowercase()) {
+            return format!(
+                "{}{}",
+                verb_str,
+                transform_darrere(&format!("{}'n", pronouns_str), verb_str)
+            );
+        }
+        return format!("{}{}", verb_str, transform_darrere("-se'n", verb_str));
+    }
+    let needs_apostrophe = apostrophe_needed(verb_str);
+    if pronouns_str.is_empty() {
+        let pronoun = if needs_apostrophe {
+            add_reflexive_vowel(persona_number)
+                .and_then(|v| add_en_apostrophe(v.trim()))
+        } else {
+            add_reflexive_consonant(persona_number)
+                .and_then(|v| add_en(v.trim()))
+        };
+        return match pronoun {
+            Some(p) => format!("{}{}", p, verb_str).trim().replace("' ", "'"),
+            None => String::new(),
+        };
+    }
+    let pronoun = if needs_apostrophe {
+        add_es_en_apostrophe(pronouns_str)
+    } else {
+        add_es_en(pronouns_str)
+    };
+    match pronoun {
+        Some(p) => format!("{}{}", p, verb_str).trim().replace("' ", "'"),
+        None => format!("{} {}", pronouns_str, verb_str)
+            .trim()
+            .replace("' ", "'"),
+    }
+}
+
+fn do_add_pronoun_reflexive_imperative(
+    pronouns_str: &str,
+    verb_str: &str,
+    persona_number: &str,
+) -> String {
+    if pronouns_str.is_empty() {
+        if let Some(p) = add_reflexive_imperative(persona_number) {
+            return format!("{}{}", verb_str, p).trim().to_string();
+        }
+    }
+    String::new()
+}
+
+fn do_replace_em_en(pronouns_str: &str, verb_str: &str) -> String {
+    if pronouns_str.eq_ignore_ascii_case("em") {
+        return format!("en {}", verb_str);
+    }
+    if pronouns_str.eq_ignore_ascii_case("m'") {
+        return format!("n'{}", verb_str);
+    }
+    if pronouns_str.eq_ignore_ascii_case("m'hi") {
+        return format!("n'hi {}", verb_str);
+    }
+    String::new()
+}
+
+fn convert_pronouns_for_intransitive_verb(s: &str) -> String {
+    s.replace("-se'l", "-se-li")
+        .replace("se'l ", "se li ")
+        .replace("l'", "li ")
+        .replace("-lo", "-li")
+        .replace("-la", "-li")
+        .replace("la ", "li ")
+        .replace("el ", "li ")
+        .replace("ho", "hi")
+}
+
+fn fix_apostrophes(s: &str) -> String {
+    let mut s = s.to_string();
+    if matches_full(
+        &Regex::new("(?i).*d'[^aeiouh].*".to_string()),
+        &s,
+    ) {
+        s = s.replace("d'", "de ");
+    }
+    let re_missing =
+        Regex::new("(?i)(.*)\\be([stm]) (h?[aeiouh].*)".to_string());
+    if let Some(caps) = re_missing.captures(&s) {
+        if let (Some(g1), Some(g2), Some(g3)) = (caps.get(1), caps.get(2), caps.get(3)) {
+            s = format!("{}{}'{}", g1.as_str(), g2.as_str(), g3.as_str());
+        }
+    }
+    let re_wrong = Regex::new("(?i)([mts])'([^aeiouh].*)".to_string());
+    if let Some(caps) = re_wrong.captures(&s) {
+        if let (Some(g1), Some(g2)) = (caps.get(1), caps.get(2)) {
+            s = format!("e{} {}", g1.as_str(), g2.as_str());
+        }
+    }
+    let re_hyphen = Regex::new("(.*)(-[stm])e-(h[oi])".to_string());
+    if let Some(caps) = re_hyphen.captures(&s) {
+        if let (Some(g1), Some(g2), Some(g3)) = (caps.get(1), caps.get(2), caps.get(3)) {
+            s = format!("{}{}'{}", g1.as_str(), g2.as_str(), g3.as_str());
+        }
+    }
+    s
+}
+
+/// `Catalan.adaptSuggestion`
+pub(crate) fn ca_adapt_suggestion(s: &str) -> String {
+    let capitalized = is_capitalized(s);
+    let s = replace_regex_all(&Regex::new("\\b([Aa]|[Dd]e) e(ls?)\\b".to_string()), s, "$1$2");
+    let s = replace_regex_all(
+        &Regex::new("\\b([LDNSTMldnstm]['’]) ".to_string()),
+        &s,
+        "$1",
+    );
+    let s = replace_regex_all(
+        &Regex::new("\\b([mtlsn])['’]([^1haeiouáàèéíòóúA-ZÀÈÉÍÒÓÚ“«\"])".to_string()),
+        &s,
+        "e$1 $2",
+    );
+    let s = replace_regex_all(
+        &Regex::new("(?i)\\be?([mtsldn])e? (h?[aeiouàèéíòóú])".to_string()),
+        &s,
+        "$1'$2",
+    );
+    let s = replace_regex_all(
+        &Regex::new("(?i)\\b(l)a ([aeoàúèéí][^ ])".to_string()),
+        &s,
+        "$1'$2",
+    );
+    let s = replace_regex_all(&Regex::new("\\b([mts]e) (['’])".to_string()), &s, "$1$2");
+    let s = replace_regex_all(&Regex::new("\\bs'e(ns|ls)\\b".to_string()), &s, "se'$1");
+    let s = replace_regex_all(
+        &Regex::new("(?i)\\b(a|de|pe) (ls? )".to_string()),
+        &s,
+        "$1$2",
+    );
+    let mut s = s;
+    if capitalized {
+        s = uppercase_first(&s);
+    }
+    s.replace(" ,", ",")
+}
+
+fn replace_regex_all(regex: &Regex, text: &str, replacement: &str) -> String {
+    regex.replace_all(text, replacement).to_string()
+}
+
+fn adjust_pronouns(ctx: &mut FilterCtx, _replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let pos_word = pos_word_start(ctx, &tokens);
+    if pos_word >= tokens.len() {
+        return None;
+    }
+    let actions: Vec<String> = ctx.arg("actions")?.split(',').map(|s| s.to_string()).collect();
+    let new_lemma = ctx.arg("newLemma");
+    let walk = verb_walk(ctx, &tokens, pos_word, ctx.synth, new_lemma.as_deref());
+    if !walk.first_verb_inflected {
+        return None;
+    }
+    let pronouns_str = build_pronouns_str(&tokens, &walk);
+    let verb_str = build_verb_str(&tokens, &walk);
+    let mut replacements: Vec<String> = Vec::new();
+    for action in &actions {
+        let replacement = match action.as_str() {
+            "addPronounEn" => do_add_pronoun_en(&walk.first_verb, &pronouns_str, &verb_str),
+            "removePronounReflexive" => {
+                do_remove_pronoun_reflexive(&pronouns_str, &verb_str, false)
+            }
+            "replaceEmEn" => do_replace_em_en(&pronouns_str, &verb_str),
+            "addPronounReflexive" => do_add_pronoun_reflexive(
+                &pronouns_str,
+                &verb_str,
+                &walk.persona_number,
+                false,
+            ),
+            "addPronounReflexiveHi" => do_add_pronoun_reflexive(
+                &pronouns_str,
+                &format!("hi {}", verb_str),
+                &walk.persona_number,
+                false,
+            ),
+            "addPronounReflexiveImperative" => do_add_pronoun_reflexive_imperative(
+                &pronouns_str,
+                &verb_str,
+                &walk.persona_number_imperative,
+            ),
+            _ => String::new(),
+        };
+        if !replacement.is_empty() {
+            replacements.push(
+                preserve_case(
+                    &replacement,
+                    tokens[walk.pos_word - walk.to_left].word().as_str(),
+                )
+                .trim()
+                .to_string(),
+            );
+        }
+    }
+    if replacements.is_empty() {
+        return None;
+    }
+    Some(JavaOutcome {
+        span: Span::from_positions(
+            tokens[walk.pos_word - walk.to_left].span().start(),
+            ctx.span.end(),
+        ),
+        replacements,
+        message: None,
+    })
+}
+
+fn adjust_verb_suggestions(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let pos_word = pos_word_start(ctx, &tokens);
+    if pos_word >= tokens.len() {
+        return None;
+    }
+    let synth = ctx.synth?;
+    let number_from_next_words = ctx.arg("numberFromNextWords").as_deref() == Some("true");
+    let two_pronouns_after = get_two_next_pronouns(&tokens, pos_word + 1);
+    let skip_walk = two_pronouns_after.1 > 0;
+    let walk = if skip_walk {
+        VerbWalk {
+            pos_word,
+            to_left: 0,
+            first_verb: String::new(),
+            first_verb_pos: 0,
+            first_verb_inflected: false,
+            persona_number: String::new(),
+            persona_number_imperative: String::new(),
+            replacement_verb: String::new(),
+        }
+    } else {
+        verb_walk(ctx, &tokens, pos_word, None, None)
+    };
+    let mut replacement_verb = String::new();
+    let mut out: Vec<String> = Vec::new();
+    for original_suggestion in &replacements {
+        let mut original_suggestion = original_suggestion.to_lowercase();
+        let mut make_intransitive = false;
+        if original_suggestion.ends_with(" [intr]") {
+            original_suggestion =
+                original_suggestion[..original_suggestion.len() - 7].to_string();
+            make_intransitive = true;
+        }
+        let first_space_index = original_suggestion.find(' ');
+        let (new_lemma, after_lemma) = match first_space_index {
+            Some(i) => (
+                original_suggestion[..i].to_string(),
+                original_suggestion[i + 1..].to_string(),
+            ),
+            None => (original_suggestion.clone(), String::new()),
+        };
+        let mut desired_number = String::new();
+        if !after_lemma.is_empty() && number_from_next_words {
+            // LT analyzes afterLemma with a full JLanguageTool instance and
+            // looks at the first token's number; approximate with the tagger
+            if let Some(word) = after_lemma.split_whitespace().next() {
+                desired_number = if ctx
+                    .tagger
+                    .get_tags_with_options(word, Some(false), Some(false))
+                    .any(|d| d.pos().as_str().starts_with('S'))
+                {
+                    "S".to_string()
+                } else {
+                    "P".to_string()
+                };
+            }
+        }
+        if new_lemma == "haver" {
+            desired_number = "S".to_string();
+        }
+        let mut action = "removePronounReflexive";
+        let mut new_lemma = new_lemma;
+        if new_lemma.ends_with("-se'n") {
+            new_lemma = new_lemma[..new_lemma.len() - 5].to_string();
+            action = "addPronounReflexiveEn";
+        } else if new_lemma.ends_with("-se") {
+            new_lemma = new_lemma[..new_lemma.len() - 3].to_string();
+            action = "addPronounReflexive";
+        } else if new_lemma.ends_with("-hi") {
+            new_lemma = new_lemma[..new_lemma.len() - 3].to_string();
+            action = "addPronounHi";
+        } else if new_lemma.ends_with("-s'ho") {
+            new_lemma = new_lemma[..new_lemma.len() - 5].to_string();
+            action = "addPronounReflexiveHo";
+        } else if new_lemma.ends_with("-s'hi") {
+            new_lemma = new_lemma[..new_lemma.len() - 5].to_string();
+            action = "addPronounReflexiveHi";
+        }
+        // synthesize with the new lemma
+        let mut postags: Vec<String> = Vec::new();
+        for d in tokens[pos_word].word().tags().iter() {
+            let mut postag = d.pos().as_str().to_string();
+            if !postag.starts_with('V') {
+                continue;
+            }
+            if new_lemma == "haver" {
+                postag = format!("VA{}", &postag[2..]);
+            }
+            if new_lemma == "ser" {
+                postag = format!("VS{}", &postag[2..]);
+            }
+            if !desired_number.is_empty() {
+                let c2 = postag_sub(&postag, 2, 3);
+                let c5 = postag_sub(&postag, 5, 6);
+                if c2 != "P" && (c5 == "S" || c5 == "P") {
+                    postag = format!(
+                        "{}{}{}",
+                        &postag[..5],
+                        desired_number,
+                        &postag[6..]
+                    );
+                }
+            }
+            postags.push(postag);
+        }
+        let postag_refs: Vec<&str> = postags.iter().map(|s| s.as_str()).collect();
+        let target_postag = synth.get_target_pos_tag(&postag_refs, "");
+        if !target_postag.is_empty() {
+            let forms = synth.synthesize_regex(&new_lemma, &Regex::new(target_postag));
+            if let Some(form) = forms.first() {
+                replacement_verb = form.clone();
+            }
+        }
+        // rebuild the verb string, adjusting the number of the first verb
+        let mut sb = String::new();
+        let mut i = walk.pos_word.saturating_sub(walk.first_verb_pos);
+        while i <= walk.pos_word {
+            if i == walk.pos_word && !replacement_verb.is_empty() {
+                sb.push_str(&replacement_verb);
+            } else {
+                let mut new_first_verb = tokens[i].word().as_str().to_string();
+                if i == walk.pos_word - walk.first_verb_pos {
+                    if let Some((_, lemma, postag)) = reading_with_tag_regex(tokens[i], "V.[SI].*") {
+                        let number = postag_sub(&postag, 5, 6);
+                        if number == "S"
+                            || (number == "P"
+                                && number != desired_number
+                                && !desired_number.is_empty())
+                        {
+                            let new_postag = format!(
+                                "{}{}{}",
+                                &postag[..5],
+                                desired_number,
+                                &postag[6..]
+                            );
+                            let forms = synth.synthesize_regex(&lemma, &Regex::new(new_postag));
+                            if let Some(form) = forms.first() {
+                                new_first_verb = form.clone();
+                            }
+                        }
+                    }
+                }
+                sb.push_str(&new_first_verb);
+            }
+            if i + 1 < tokens.len() && tokens[i + 1].has_space_before() {
+                sb.push(' ');
+            }
+            i += 1;
+        }
+        let verb_str = sb.trim().to_lowercase();
+        let mut pronouns_str = build_pronouns_str(&tokens, &walk);
+        if !walk.first_verb_inflected {
+            pronouns_str = two_pronouns_after.0.clone();
+        }
+        let pronouns_str = pronouns_str.to_lowercase();
+        let mut pronouns_str_ref = pronouns_str.clone();
+        let mut new_verb_str = verb_str.clone();
+        let replacement = match action {
+            "addPronounEn" => do_add_pronoun_en(&walk.first_verb, &pronouns_str, &verb_str),
+            "removePronounReflexive" => {
+                do_remove_pronoun_reflexive(&pronouns_str, &verb_str, !walk.first_verb_inflected)
+            }
+            "addPronounReflexiveEn" => do_add_pronoun_reflexive_en(
+                &pronouns_str,
+                &verb_str,
+                &walk.persona_number,
+                !walk.first_verb_inflected,
+            ),
+            "replaceEmEn" => {
+                do_replace_em_en(&pronouns_str, &verb_str)
+            }
+            "addPronounReflexive" => do_add_pronoun_reflexive(
+                &pronouns_str,
+                &verb_str,
+                &walk.persona_number,
+                !walk.first_verb_inflected,
+            ),
+            "addPronounReflexiveHi" => do_add_pronoun_reflexive(
+                "",
+                &format!("hi {}", verb_str),
+                &walk.persona_number,
+                !walk.first_verb_inflected,
+            ),
+            "addPronounReflexiveHo" => {
+                if walk.first_verb_inflected {
+                    new_verb_str = format!("ho {}", verb_str);
+                } else if !pronouns_str.is_empty() {
+                    pronouns_str_ref = format!("{}-ho", pronouns_str);
+                }
+                do_add_pronoun_reflexive(
+                    &pronouns_str_ref,
+                    &new_verb_str,
+                    &walk.persona_number,
+                    !walk.first_verb_inflected,
+                )
+            }
+            "addPronounHi" => do_add_pronoun_hi("", &verb_str),
+            "addPronounReflexiveImperative" => do_add_pronoun_reflexive_imperative(
+                &pronouns_str,
+                &verb_str,
+                &walk.persona_number_imperative,
+            ),
+            _ => String::new(),
+        };
+        if !replacement.is_empty() {
+            let replacement = if make_intransitive {
+                convert_pronouns_for_intransitive_verb(&replacement)
+            } else {
+                replacement
+            };
+            let replacement = fix_apostrophes(&replacement);
+            out.push(
+                preserve_case(
+                    &format!("{} {}", replacement, after_lemma),
+                    tokens[walk.pos_word - walk.to_left].word().as_str(),
+                )
+                .trim()
+                .to_string(),
+            );
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(JavaOutcome {
+        span: Span::from_positions(
+            tokens[walk.pos_word - walk.to_left].span().start(),
+            ctx.span.end(),
+        ),
+        replacements: out,
+        message: None,
+    })
+}
+
+fn anar_a_suggestions(ctx: &mut FilterCtx, _replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let init_pos = pos_word_start(ctx, &tokens);
+    if init_pos + 2 >= tokens.len() {
+        return None;
+    }
+    let verb_postag = reading_with_tag_regex(tokens[init_pos], "V.IP.*")?.2;
+    let lemma = reading_with_tag_regex(tokens[init_pos + 2], "V.N.*")?.1;
+    let new_postag = format!("V[MS]I[PF]{}", postag_sub(&verb_postag, 4, 8));
+    let synth = ctx.synth?;
+    let synth_forms = synth.synthesize_regex(&lemma, &Regex::new(new_postag));
+    if synth_forms.is_empty() {
+        return None;
+    }
+    let (pronoms_darrere, adjust_end_pos) = get_two_next_pronouns(&tokens, init_pos + 3);
+    let mut replacements: Vec<String> = Vec::new();
+    for verb in &synth_forms {
+        let mut suggestion = String::new();
+        if !pronoms_darrere.is_empty() {
+            suggestion = transform_davant(&pronoms_darrere, verb);
+        }
+        suggestion.push_str(verb);
+        replacements.push(preserve_case(&suggestion, tokens[init_pos].word().as_str()));
+    }
+    if replacements.is_empty() {
+        return None;
+    }
+    let end_idx = init_pos + 2 + adjust_end_pos;
+    if end_idx >= tokens.len() {
+        return None;
+    }
+    Some(JavaOutcome {
+        span: Span::from_positions(
+            tokens[init_pos].span().start(),
+            tokens[end_idx].span().end(),
+        ),
+        replacements,
+        message: None,
+    })
+}
+
+fn donar_temps_suggestions(ctx: &mut FilterCtx, _replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let pos_word = pos_word_start(ctx, &tokens);
+    let synth = ctx.synth?;
+    if pos_word >= tokens.len() {
+        return None;
+    }
+    let pronom_postag = reading_with_tag_regex(tokens[pos_word], "P.*")?.2;
+    let pronom_gender_number = format!(
+        "{}{}",
+        postag_sub(&pronom_postag, 2, 3),
+        postag_sub(&pronom_postag, 4, 5)
+    );
+    let index_first_verb = pos_word + 1;
+    let mut index_main_verb = index_first_verb;
+    while index_main_verb < tokens.len()
+        && !tok_has_any_lemma(tokens[index_main_verb], &["donar"])
+    {
+        index_main_verb += 1;
+    }
+    if index_main_verb + 1 >= tokens.len() {
+        return None;
+    }
+    let verb_postag = reading_with_tag_regex(tokens[index_main_verb], "V.*")?.2;
+
+    // haver-hi temps
+    let synth_forms = synth.synthesize_regex(
+        "haver",
+        &Regex::new(format!("VA{}", postag_sub(&verb_postag, 2, 8))),
+    );
+    let mut suggestion1 = String::new();
+    if !synth_forms.is_empty() {
+        suggestion1.push_str("hi");
+        let mut index = index_first_verb;
+        while index < index_main_verb {
+            if tokens[index].has_space_before() || suggestion1.chars().count() == 2 {
+                suggestion1.push(' ');
+            }
+            suggestion1.push_str(tokens[index].word().as_str());
+            index += 1;
+        }
+        suggestion1.push_str(&format!(" {} temps", synth_forms[0]));
+    }
+    let mut replacements: Vec<String> = Vec::new();
+    let sugg1 = preserve_case(
+        &suggestion1.replace("de haver", "d'haver"),
+        tokens[pos_word].word().as_str(),
+    );
+    if !sugg1.is_empty() {
+        replacements.push(sugg1);
+    }
+
+    // tenir temps
+    let mut suggestion2 = String::new();
+    if index_first_verb == index_main_verb {
+        let synth_forms2 = synth.synthesize_regex(
+            "tenir",
+            &Regex::new(format!(
+                "{}{}{}",
+                postag_sub(&verb_postag, 0, 4),
+                pronom_gender_number,
+                postag_sub(&verb_postag, 6, 8)
+            )),
+        );
+        if let Some(form) = synth_forms2.first() {
+            suggestion2 = format!("{} temps", form);
+        }
+    } else if let Some((lemma2, postag2)) = tok_first_reading(tokens[index_first_verb]) {
+        let synth_forms2 = synth.synthesize_regex(
+            &lemma2,
+            &Regex::new(format!(
+                "{}{}{}",
+                postag_sub(&postag2, 0, 4),
+                pronom_gender_number,
+                postag_sub(&postag2, 6, 8)
+            )),
+        );
+        if let Some(form) = synth_forms2.first() {
+            suggestion2 = form.clone();
+            let mut index = index_first_verb + 1;
+            while index < index_main_verb {
+                if tokens[index].has_space_before() {
+                    suggestion2.push(' ');
+                }
+                suggestion2.push_str(tokens[index].word().as_str());
+                index += 1;
+            }
+            if let Some((lemma_main, postag_main)) = tok_first_reading(tokens[index_main_verb]) {
+                let synth_forms3 = synth.synthesize_regex(&lemma_main, &Regex::new(postag_main));
+                if let Some(form3) = synth_forms3.first() {
+                    suggestion2.push_str(&format!(" {} temps", form3));
+                } else {
+                    suggestion2 = String::new();
+                }
+            }
+        }
+    }
+    let sugg2 = preserve_case(&suggestion2, tokens[pos_word].word().as_str());
+    if !sugg2.is_empty() {
+        replacements.push(sugg2);
+    }
+    if replacements.is_empty() {
+        return None;
+    }
+    Some(JavaOutcome {
+        span: Span::from_positions(
+            tokens[pos_word].span().start(),
+            tokens[index_main_verb + 1].span().end(),
+        ),
+        replacements,
+        message: None,
+    })
+}
+
+fn olidarse_suggestions(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let pos_word = pos_word_start(ctx, &tokens);
+    let synth = ctx.synth?;
+    if pos_word + 2 >= tokens.len() {
+        return None;
+    }
+    let pronom_postag = reading_with_tag_regex(tokens[pos_word + 1], "P.*")?.2;
+    let pronom_gender_number = format!(
+        "{}{}",
+        postag_sub(&pronom_postag, 2, 3),
+        postag_sub(&pronom_postag, 4, 5)
+    );
+    let mut index_main_verb = pos_word + 2;
+    while index_main_verb < tokens.len()
+        && !tok_has_any_lemma(
+            tokens[index_main_verb],
+            &["oblidar", "descuidar", "passar"],
+        )
+    {
+        index_main_verb += 1;
+    }
+    if index_main_verb >= tokens.len() {
+        return None;
+    }
+    let (_, mut lemma, verb_postag) = reading_with_tag_regex(tokens[pos_word + 2], "V.*")?;
+    if lemma == "passar" {
+        lemma = "descuidar".to_string();
+    }
+    let synth_forms = synth.synthesize_regex(
+        &lemma,
+        &Regex::new(format!(
+            "{}{}{}",
+            postag_sub(&verb_postag, 0, 4),
+            pronom_gender_number,
+            postag_sub(&verb_postag, 6, 8)
+        )),
+    );
+    let mut new_verb = synth_forms.first()?.clone();
+    let mut i = pos_word + 3;
+    while i < index_main_verb + 1 {
+        if tokens[i].has_space_before() {
+            new_verb.push(' ');
+        }
+        new_verb.push_str(
+            &tokens[i]
+                .word()
+                .as_str()
+                .replace("passar", "descuidar")
+                .replace("passat", "descuidat")
+                .replace("passant", "descuidant"),
+        );
+        i += 1;
+    }
+    let verb_vowel = apostrophe_needed(&new_verb);
+    let mut word_after = String::new();
+    if index_main_verb + 1 < tokens.len() {
+        if let Some(at) = reading_with_tag_regex(
+            tokens[index_main_verb + 1],
+            "D.*|V.N.*|P[DI].*|NC.*",
+        ) {
+            word_after = at.0;
+        }
+        let next_word = tokens[index_main_verb + 1].word().as_str().to_lowercase();
+        if ["com", "de", "d'", "que"].contains(&next_word.as_str()) {
+            word_after = tokens[index_main_verb + 1].word().as_str().to_string();
+        }
+    }
+    let use_en = word_after.is_empty()
+        && !word_after.eq_ignore_ascii_case("de")
+        && !word_after.eq_ignore_ascii_case("d'")
+        && !word_after.eq_ignore_ascii_case("que");
+    let transform: fn(&str) -> Option<&'static str> = if use_en {
+        if verb_vowel {
+            add_reflexive_en_vowel
+        } else {
+            add_reflexive_en_consonant
+        }
+    } else if verb_vowel {
+        add_reflexive_vowel
+    } else {
+        add_reflexive_consonant
+    };
+    let mut sugg = transform(&pronom_gender_number).unwrap_or("").to_string();
+    sugg.push_str(&new_verb);
+    let mut characters_after_correction = 0usize;
+    if word_after.eq_ignore_ascii_case("el") || word_after.eq_ignore_ascii_case("els") {
+        sugg.push_str(&format!(" d{}", word_after.to_lowercase()));
+        characters_after_correction = word_after.chars().count() + 1;
+    } else if !word_after.is_empty()
+        && !word_after.eq_ignore_ascii_case("de")
+        && !word_after.eq_ignore_ascii_case("d'")
+        && !word_after.eq_ignore_ascii_case("que")
+    {
+        let word_after_apostrophe = apostrophe_needed(&word_after);
+        sugg.push_str(if word_after_apostrophe { " d'" } else { " de" });
+        if word_after_apostrophe {
+            characters_after_correction = 1;
+        }
+    }
+    let mut out = vec![preserve_case(&sugg, tokens[pos_word].word().as_str())];
+    for s in &replacements {
+        let s = if characters_after_correction == 1 {
+            format!("{} ", s)
+        } else {
+            s.clone()
+        };
+        out.push(ca_adapt_suggestion(&s));
+    }
+    let end = tokens[index_main_verb].span().end();
+    let span_end = Position {
+        byte: end.byte + characters_after_correction,
+        char: end.char + characters_after_correction,
+    };
+    Some(JavaOutcome {
+        span: Span::from_positions(tokens[pos_word].span().start(), span_end),
+        replacements: out,
+        message: Some(ctx.message.replace("passar", "descuidar")),
+    })
+}
+
+fn add_reflexive_en_vowel(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "1S" => "me n'",
+        "2S" => "te n'",
+        "3S" => "se n'",
+        "1P" => "ens n'",
+        "2P" => "us n'",
+        "3P" => "se n'",
+        _ => return None,
+    })
+}
+
+fn add_reflexive_en_consonant(k: &str) -> Option<&'static str> {
+    Some(match k {
+        "1S" => "me'n ",
+        "2S" => "te'n ",
+        "3S" => "se'n ",
+        "1P" => "ens en ",
+        "2P" => "us en ",
+        "3P" => "se'n ",
+        _ => return None,
+    })
+}
+
+fn portar_gerundi_suggestions(ctx: &mut FilterCtx, _replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let pos_word = pos_word_start(ctx, &tokens);
+    let synth = ctx.synth?;
+    if pos_word + 1 >= tokens.len() {
+        return None;
+    }
+    let new_lemma = ctx.arg("newLemma").unwrap_or_default();
+    let (_, atr1_lemma, atr1_postag) = reading_with_tag_regex(tokens[pos_word], "V.[IS].*")?;
+    let atr1 = (atr1_lemma, atr1_postag);
+    let atr2 = reading_with_tag_regex(tokens[pos_word + 1], "V.G.*")?;
+    let lemma = if new_lemma.is_empty() {
+        atr2.1.clone()
+    } else {
+        new_lemma
+    };
+    let mut replacements: Vec<String> = Vec::new();
+    // he fet
+    let synth_forms1 = synth.synthesize_regex(
+        "haver",
+        &Regex::new(format!("VA{}", postag_sub(&atr1.1, 2, atr1.1.chars().count()))),
+    );
+    let synth_forms2 = synth.synthesize_regex(&lemma, &Regex::new("V.P..SM.".to_string()));
+    for f1 in &synth_forms1 {
+        for f2 in &synth_forms2 {
+            replacements.push(format!("{} {}", f1, f2));
+        }
+    }
+    // faig
+    let synth_forms3 = synth.synthesize_regex(
+        &lemma,
+        &Regex::new(format!("V.{}", postag_sub(&atr1.1, 2, atr1.1.chars().count()))),
+    );
+    if let Some(f3) = synth_forms3.first() {
+        replacements.push(f3.clone());
+    }
+    if replacements.is_empty() {
+        return None;
+    }
+    let next_pronouns = get_two_next_pronouns(&tokens, pos_word + 2);
+    let previous_pronouns = if pos_word > 0 {
+        get_previous_pronouns(&tokens, pos_word - 1)
+    } else {
+        (String::new(), 0)
+    };
+    let mut correct_start_index: isize = 0;
+    let mut correct_end_index: usize = 0;
+    for replacement in replacements.iter_mut() {
+        let mut pronouns_suggestion = String::new();
+        if !next_pronouns.0.is_empty() {
+            pronouns_suggestion = transform_davant(&next_pronouns.0, replacement);
+            correct_end_index = next_pronouns.1;
+        } else if !previous_pronouns.0.is_empty() {
+            pronouns_suggestion = transform_davant(&previous_pronouns.0, replacement);
+            correct_start_index = -(previous_pronouns.1 as isize);
+        }
+        let sample = tokens[(pos_word as isize + correct_start_index) as usize].word().as_str();
+        *replacement = preserve_case(&format!("{}{}", pronouns_suggestion, replacement), sample);
+    }
+    let start_idx = (pos_word as isize + correct_start_index) as usize;
+    Some(JavaOutcome {
+        span: Span::from_positions(
+            tokens[start_idx].span().start(),
+            tokens[pos_word + 1 + correct_end_index].span().end(),
+        ),
+        replacements,
+        message: None,
+    })
+}
+
+fn portar_temps_suggestions(ctx: &mut FilterCtx, _replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.sentence_tokens();
+    let pos_word = pos_word_start(ctx, &tokens);
+    let synth = ctx.synth?;
+    if pos_word + 1 >= tokens.len() {
+        return None;
+    }
+    let verb_postag = reading_with_tag_regex(tokens[pos_word], "V.*")?.2;
+    let new_postag = format!(
+        "{}[30][S0].{}",
+        postag_sub(&verb_postag, 0, 4),
+        postag_sub(&verb_postag, 7, 8)
+    );
+    let synth_forms = synth.synthesize_regex("fer", &Regex::new(new_postag));
+    if synth_forms.is_empty() {
+        return None;
+    }
+    let mut suggestion = synth_forms[0].clone();
+    // walk over PTime-chunked tokens (set by the disambiguator via addchunk)
+    let mut i = pos_word + 1;
+    while i < tokens.len() && tokens[i].chunks().iter().any(|c| c == "PTime") {
+        if tokens[i].has_space_before() {
+            suggestion.push(' ');
+        }
+        suggestion.push_str(tokens[i].word().as_str());
+        i += 1;
+    }
+    let last_token_pos = i;
+    if last_token_pos + 1 >= tokens.len() {
+        return None;
+    }
+    let last_token = tokens[last_token_pos];
+    let mut adjust_end_pos: isize = 0;
+    if last_token.word().as_str() == "que" {
+        suggestion.push_str(" que");
+    } else if tok_has_pos_start(last_token, "VMG") || tok_has_pos_start(last_token, "VSG") {
+        suggestion.push_str(" que ");
+        let (pronoms, n) = get_two_next_pronouns(&tokens, last_token_pos + 1);
+        adjust_end_pos += n as isize;
+        let lemma2 = reading_with_tag_regex(last_token, "V.G.*")?.1;
+        let synth_forms2 = synth.synthesize_regex(
+            &lemma2,
+            &Regex::new(format!("V.I{}", postag_sub(&verb_postag, 3, 8))),
+        );
+        if synth_forms2.is_empty() {
+            return None;
+        }
+        if !pronoms.is_empty() {
+            suggestion.push_str(&transform_davant(&pronoms, &synth_forms2[0]));
+        }
+        suggestion.push_str(&synth_forms2[0]);
+    } else if last_token.word().as_str() == "sense"
+        && (tok_has_pos_start(tokens[last_token_pos + 1], "VSN")
+            || tok_has_pos_start(tokens[last_token_pos + 1], "VMN"))
+    {
+        suggestion.push_str(" que no ");
+        adjust_end_pos += 1;
+        let (pronoms, n) = get_two_next_pronouns(&tokens, last_token_pos + 2);
+        adjust_end_pos += n as isize;
+        let lemma2 = reading_with_tag_regex(tokens[last_token_pos + 1], "V.N.*")?.1;
+        let synth_forms2 = synth.synthesize_regex(
+            &lemma2,
+            &Regex::new(format!("V.I{}", postag_sub(&verb_postag, 3, 8))),
+        );
+        if synth_forms2.is_empty() {
+            return None;
+        }
+        if !pronoms.is_empty() {
+            suggestion.push_str(&transform_davant(&pronoms, &synth_forms2[0]));
+        }
+        suggestion.push_str(&synth_forms2[0]);
+    } else if ["així", "a", "en", "ací", "aquí", "ahí", "allí", "allà", "de"]
+        .contains(&last_token.word().as_str())
+        || tok_has_pos_start(last_token, "AQ")
+        || tok_has_pos_start(last_token, "VMP")
+    {
+        let synth_forms2 = synth.synthesize_regex(
+            "estar",
+            &Regex::new(format!("V.I{}", postag_sub(&verb_postag, 3, 8))),
+        );
+        if synth_forms2.is_empty() {
+            return None;
+        }
+        suggestion.push_str(&format!(" que {}", synth_forms2[0]));
+        adjust_end_pos -= 1;
+    } else {
+        return None;
+    }
+    let replacement = preserve_case(&suggestion, tokens[pos_word].word().as_str());
+    if replacement.is_empty() {
+        return None;
+    }
+    let end_idx = (last_token_pos as isize + adjust_end_pos) as usize;
+    if end_idx >= tokens.len() {
+        return None;
+    }
+    Some(JavaOutcome {
+        span: Span::from_positions(
+            tokens[pos_word].span().start(),
+            tokens[end_idx].span().end(),
+        ),
+        replacements: vec![replacement],
+        message: None,
+    })
+}
+
+// ===== Arabic filters (ArabicTagManager / ArabicSynthesizer ports) =====
+
+/// Arabic POS tags encode morphological flags at fixed character positions,
+/// e.g. `VW1;M3H-faU;WS-`. Mirrors `ArabicTagManager`.
+fn ar_is_noun(postag: &str) -> bool {
+    postag.starts_with('N')
+}
+
+fn ar_is_verb(postag: &str) -> bool {
+    postag.starts_with('V')
+}
+
+fn ar_is_stopword(postag: &str) -> bool {
+    postag.starts_with('P')
+}
+
+fn ar_is_adj(postag: &str) -> bool {
+    postag.starts_with("NA")
+}
+
+fn ar_is_masdar(postag: &str) -> bool {
+    postag.starts_with("NM")
+}
+
+fn ar_flag_pos(postag: &str, flag_type: &str) -> Option<usize> {
+    let prefix = if ar_is_noun(postag) {
+        "NOUN_"
+    } else if ar_is_verb(postag) {
+        "VERB_"
+    } else if ar_is_stopword(postag) {
+        "PARTICLE_"
+    } else {
+        return None;
+    };
+    let pos = match (prefix.to_string() + flag_type).as_str() {
+        "NOUN_WORDTYPE" => 0,
+        "NOUN_CATEGORY" => 1,
+        "NOUN_GENDER" => 4,
+        "NOUN_NUMBER" => 5,
+        "NOUN_CASE" => 6,
+        "NOUN_INFLECT_MARK" => 7,
+        "NOUN_CONJ" => 9,
+        "NOUN_JAR" => 10,
+        "NOUN_PRONOUN" => 11,
+        "VERB_WORDTYPE" => 0,
+        "VERB_CATEGORY" => 1,
+        "VERB_TRANS" => 2,
+        "VERB_GENDER" => 4,
+        "VERB_NUMBER" => 5,
+        "VERB_PERSON" => 6,
+        "VERB_INFLECT_MARK" => 7,
+        "VERB_TENSE" => 8,
+        "VERB_VOICE" => 9,
+        "VERB_CASE" => 10,
+        "VERB_CONJ" => 12,
+        "VERB_ISTIQBAL" => 13,
+        "VERB_PRONOUN" => 14,
+        "PARTICLE_WORDTYPE" => 0,
+        "PARTICLE_CATEGORY" => 1,
+        "PARTICLE_OPTION" => 2,
+        "PARTICLE_GENDER" => 4,
+        "PARTICLE_NUMBER" => 5,
+        "PARTICLE_CASE" => 6,
+        "PARTICLE_CONJ" => 8,
+        "PARTICLE_JAR" => 9,
+        "PARTICLE_PRONOUN" => 10,
+        _ => return None,
+    };
+    Some(pos)
+}
+
+fn ar_get_flag(postag: &str, flag_type: &str) -> char {
+    match ar_flag_pos(postag, flag_type) {
+        Some(pos) => postag.chars().nth(pos).unwrap_or('-'),
+        None => '-',
+    }
+}
+
+fn ar_set_flag(postag: &str, flag_type: &str, flag: char) -> String {
+    if let Some(pos) = ar_flag_pos(postag, flag_type) {
+        let mut chars: Vec<char> = postag.chars().collect();
+        if pos < chars.len() {
+            chars[pos] = flag;
+            return chars.into_iter().collect();
+        }
+    }
+    postag.to_string()
+}
+
+fn ar_is_definite(postag: &str) -> bool {
+    ar_is_noun(postag) && ar_get_flag(postag, "PRONOUN") == 'L'
+}
+
+fn ar_is_majrour(postag: &str) -> bool {
+    let flag = ar_get_flag(postag, "CASE");
+    flag == 'I' || flag == '-'
+}
+
+fn ar_is_dual(postag: &str) -> bool {
+    ar_get_flag(postag, "NUMBER") == '2'
+}
+
+fn ar_is_attached(postag: &str) -> bool {
+    (ar_is_noun(postag) || ar_is_verb(postag)) && ar_get_flag(postag, "PRONOUN") == 'H'
+}
+
+fn ar_is_unattached_noun(postag: &str) -> bool {
+    ar_is_noun(postag) && ar_get_flag(postag, "PRONOUN") != 'H' && !postag.ends_with('X')
+}
+
+fn ar_has_jar(postag: &str) -> bool {
+    ar_is_noun(postag) && ar_get_flag(postag, "JAR") != '-'
+}
+
+fn ar_has_pronoun(postag: &str) -> bool {
+    ar_get_flag(postag, "PRONOUN") == 'H'
+}
+
+fn ar_has_conjunction(postag: &str) -> bool {
+    let flag = ar_get_flag(postag, "CONJ");
+    (ar_is_noun(postag) && flag != '-')
+        || (ar_is_verb(postag) && flag != '-')
+        || (ar_is_stopword(postag) && flag != 'W')
+}
+
+fn ar_jar_prefix(postag: &str) -> &'static str {
+    if postag.is_empty() || !ar_is_noun(postag) {
+        return "";
+    }
+    match ar_get_flag(postag, "JAR") {
+        'L' => "ل",
+        'K' => "ك",
+        'B' => "ب",
+        _ => "",
+    }
+}
+
+fn ar_conjunction_prefix(postag: &str) -> &'static str {
+    match ar_get_flag(postag, "CONJ") {
+        'F' => "ف",
+        'W' => "و",
+        _ => "",
+    }
+}
+
+fn ar_definite_prefix(postag: &str) -> &'static str {
+    if postag.is_empty() {
+        return "";
+    }
+    if ar_is_noun(postag) && ar_get_flag(postag, "PRONOUN") == 'L' {
+        if ar_has_jar(postag) && ar_jar_prefix(postag) == "ل" {
+            "ل"
+        } else {
+            "ال"
+        }
+    } else {
+        ""
+    }
+}
+
+fn ar_pronoun_suffix(postag: &str) -> &'static str {
+    if postag.is_empty() {
+        return "";
+    }
+    match ar_get_flag(postag, "PRONOUN") {
+        'b' => "ني",
+        'c' => "نا",
+        'd' => "ك",
+        'e' => "كما",
+        'f' => "كم",
+        'g' => "كن",
+        'H' => "ه",
+        'i' => "ها",
+        'j' => "هما",
+        'k' => "هم",
+        'n' => "هن",
+        _ => "",
+    }
+}
+
+/// `ArabicTagManager.setProcleticFlags`: neutralize prefix flags.
+fn ar_set_procletic_flags(postag: &str) -> String {
+    if postag.is_empty() {
+        return String::new();
+    }
+    if ar_is_verb(postag) {
+        let mut t = ar_set_flag(postag, "CONJ", '-');
+        t = ar_set_flag(&t, "ISTIQBAL", '-');
+        t
+    } else if ar_is_noun(postag) {
+        let mut t = ar_set_flag(postag, "CONJ", '-');
+        t = ar_set_flag(&t, "JAR", '-');
+        if ar_is_definite(postag) {
+            t = ar_set_flag(&t, "PRONOUN", '-');
+        }
+        t
+    } else if ar_is_stopword(postag) {
+        let mut t = ar_set_flag(postag, "CONJ", '-');
+        t = ar_set_flag(&t, "JAR", '-');
+        t
+    } else {
+        postag.to_string()
+    }
+}
+
+/// `ArabicTagManager.mergePosTag`
+fn ar_merge_pos_tag(source: &str, target: &str) -> String {
+    if source.is_empty() {
+        return target.to_string();
+    }
+    if target.is_empty() {
+        return source.to_string();
+    }
+    if ar_is_noun(source) && ar_is_noun(target) {
+        if source.chars().count() != target.chars().count() {
+            return source.to_string();
+        }
+        ar_set_flag(source, "CATEGORY", ar_get_flag(target, "CATEGORY"))
+    } else if ar_is_verb(source) && ar_is_verb(target) {
+        if source.chars().count() != target.chars().count() {
+            return source.to_string();
+        }
+        let t = ar_set_flag(source, "CATEGORY", ar_get_flag(target, "CATEGORY"));
+        ar_set_flag(&t, "TRANS", ar_get_flag(target, "TRANS"))
+    } else if ar_is_stopword(source) && ar_is_stopword(target) {
+        if source.chars().count() != target.chars().count() {
+            return source.to_string();
+        }
+        let t = ar_set_flag(source, "CATEGORY", ar_get_flag(target, "CATEGORY"));
+        ar_set_flag(&t, "OPTION", ar_get_flag(target, "OPTION"))
+    } else if (ar_is_stopword(source) && (ar_is_verb(target) || ar_is_noun(target)))
+        || ((ar_is_verb(source) || ar_is_noun(source)) && ar_is_stopword(target))
+    {
+        let mut t = target.to_string();
+        if ar_has_pronoun(source) {
+            t = ar_set_flag(&t, "PRONOUN", ar_get_flag(source, "PRONOUN"));
+        }
+        t
+    } else if (ar_is_verb(source) && ar_is_noun(target)) || (ar_is_noun(source) && ar_is_verb(target)) {
+        let mut t = target.to_string();
+        if ar_has_pronoun(source) {
+            t = ar_set_flag(&t, "PRONOUN", ar_get_flag(source, "PRONOUN"));
+        }
+        ar_set_flag(&t, "CONJ", ar_get_flag(source, "CONJ"))
+    } else {
+        target.to_string()
+    }
+}
+
+/// `ArabicTagger.getProclitic` (prefix extracted from the word surface)
+fn ar_get_proclitic(word: &str, postag: &str) -> String {
+    if postag.is_empty() {
+        return String::new();
+    }
+    let prefix_len = if ar_is_verb(postag) {
+        let mut n = 0;
+        if ar_get_flag(postag, "CONJ") == 'W' {
+            n += 1;
+        }
+        if ar_get_flag(postag, "ISTIQBAL") == 'S' {
+            n += 1;
+        }
+        n
+    } else if ar_is_noun(postag) {
+        let mut n = 0;
+        if ar_get_flag(postag, "CONJ") != '-' {
+            n += 1;
+        }
+        if ar_get_flag(postag, "JAR") != '-' {
+            n += 1;
+        }
+        if ar_is_definite(postag) {
+            if ar_get_flag(postag, "JAR") == 'L' {
+                n += 1;
+            } else {
+                n += 2;
+            }
+        }
+        n
+    } else {
+        return String::new();
+    };
+    word.chars().take(prefix_len).collect()
+}
+
+/// `ArabicTagger.getEnclitic` (pronoun suffix extracted from the word surface)
+fn ar_get_enclitic(word: &str, postag: &str) -> String {
+    if postag.is_empty() {
+        return String::new();
+    }
+    if ar_get_flag(postag, "PRONOUN") != '-' {
+        // faithful order of the Java if/else chain (longest endings first)
+        if word.ends_with("ها") {
+            return "ها".to_string();
+        }
+        if word.ends_with("هما") {
+            return "هما".to_string();
+        }
+        if word.ends_with("ه") {
+            return "ه".to_string();
+        }
+        if word.ends_with("هم") {
+            return "هم".to_string();
+        }
+        if word.ends_with("هن") {
+            return "هن".to_string();
+        }
+        if word.ends_with("كما") {
+            return "كما".to_string();
+        }
+        if word.ends_with("كم") {
+            return "كم".to_string();
+        }
+        if word.ends_with("كن") {
+            return "كن".to_string();
+        }
+        if word.ends_with("ني") {
+            return "ني".to_string();
+        }
+        if word.ends_with("نا") {
+            return "نا".to_string();
+        }
+        if word.ends_with("ك") {
+            return "ك".to_string();
+        }
+        if (word == "عني" || word == "مني") && word.ends_with("ني") {
+            return "ني".to_string();
+        }
+        if (word == "عنا" || word == "منا") && word.ends_with("نا") {
+            return "نا".to_string();
+        }
+        String::new()
+    } else {
+        ar_pronoun_suffix(postag).to_string()
+    }
+}
+
+/// `ArabicSynthesizer.correctStem`
+fn ar_correct_stem(stem: &str, postag: &str) -> String {
+    let mut correct_stem = stem.to_string();
+    if ar_is_attached(postag) {
+        correct_stem = correct_stem.strip_suffix('ه').unwrap_or(&correct_stem).to_string();
+    }
+    if ar_is_definite(postag) {
+        correct_stem = format!("{}{}", ar_definite_prefix(postag), correct_stem);
+    }
+    if ar_has_jar(postag) {
+        correct_stem = format!("{}{}", ar_jar_prefix(postag), correct_stem);
+    }
+    if ar_has_conjunction(postag) {
+        correct_stem = format!("{}{}", ar_conjunction_prefix(postag), correct_stem);
+    }
+    correct_stem
+}
+
+/// `ArabicSynthesizer.setEncliticMultiple`
+fn ar_set_enclitic_multiple(
+    synth: &Synthesizer,
+    word: &str,
+    lemma: &str,
+    postag: &str,
+    suffix: &str,
+) -> Vec<String> {
+    let default_wordlist = vec![format!("({})", word)];
+    if postag.is_empty() {
+        return default_wordlist;
+    }
+    let flag = if suffix.is_empty() { '-' } else { 'H' };
+    let procletic = ar_get_proclitic(word, postag);
+    let mut new_postag = ar_set_flag(postag, "PRONOUN", flag);
+    new_postag = ar_set_procletic_flags(&new_postag);
+
+    let stems = synth.lookup(lemma, &new_postag);
+    let mut wordlist: Vec<String> = Vec::new();
+    for stem0 in &stems {
+        let stem = ar_correct_stem(stem0, &new_postag);
+        let new_word = if ar_has_pronoun(&new_postag) && flag == 'H' {
+            if stem.ends_with('ي') {
+                if suffix == "ي" {
+                    format!("{}{}", procletic, stem)
+                } else {
+                    String::new()
+                }
+            } else if stem.ends_with('ه') {
+                format!(
+                    "{}{}{}",
+                    procletic,
+                    stem.strip_suffix('ه').unwrap_or(&stem),
+                    suffix
+                )
+            } else {
+                format!("{}{}{}", procletic, stem, suffix)
+            }
+        } else {
+            format!("{}{}", procletic, stem)
+        };
+        if !new_word.is_empty() {
+            wordlist.push(new_word);
+        }
+    }
+    if wordlist.is_empty() {
+        wordlist.push(format!("({})", word));
+    }
+    wordlist
+}
+
+/// `ArabicSynthesizer.inflectLemmaLike`
+fn ar_inflect_lemma_like(
+    ctx: &FilterCtx,
+    synth: &Synthesizer,
+    target_lemma: &str,
+    source_word: &str,
+    source_postag: &str,
+) -> Vec<String> {
+    let readings = ar_tag_word(ctx, target_lemma);
+    let mut has_lemma = false;
+    for (lemma, _) in &readings {
+        if lemma == target_lemma {
+            has_lemma = true;
+            break;
+        }
+    }
+    if !has_lemma {
+        return vec![format!("[{}]", target_lemma)];
+    }
+    let prefix = ar_get_proclitic(source_word, source_postag);
+    let suffix = ar_get_enclitic(source_word, source_postag);
+    let mut wordlist: Vec<String> = Vec::new();
+    for (lemma, postag) in &readings {
+        if lemma != target_lemma {
+            continue;
+        }
+        let merged = ar_merge_pos_tag(source_postag, postag);
+        let token_word = format!("{}{}", prefix, target_lemma);
+        wordlist.extend(ar_set_enclitic_multiple(
+            synth,
+            &token_word,
+            target_lemma,
+            &merged,
+            &suffix,
+        ));
+    }
+    wordlist.sort();
+    wordlist.dedup();
+    wordlist
+}
+
+/// Tag a single word with the analyzer dictionary (approximating
+/// `ArabicTagger.tag(word)`; also retries without diacritics).
+fn ar_tag_word(ctx: &FilterCtx, word: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = ctx
+        .tagger
+        .get_tags_with_options(word, Some(false), Some(false))
+        .map(|d| (d.lemma().as_str().to_string(), d.pos().as_str().to_string()))
+        .collect();
+    if out.is_empty() {
+        let stripped: String = word
+            .chars()
+            .filter(|c| !matches!(*c, '\u{064B}'..='\u{0652}' | '\u{0670}'))
+            .collect();
+        if stripped != word {
+            out = ctx
+                .tagger
+                .get_tags_with_options(&stripped, Some(false), Some(false))
+                .map(|d| (d.lemma().as_str().to_string(), d.pos().as_str().to_string()))
+                .collect();
+        }
+    }
+    out
+}
+
+/// lemmas of a token's readings filtered by word class (`ArabicTagger.getLemmas`)
+fn ar_get_lemmas(token: &Token, kind: &str) -> Vec<String> {
+    let mut lemma_list: Vec<String> = Vec::new();
+    for d in token.word().tags().iter() {
+        let pos = d.pos().as_str();
+        let matches_kind = match kind {
+            "verb" => ar_is_verb(pos),
+            "adj" => ar_is_adj(pos),
+            "masdar" => ar_is_masdar(pos),
+            _ => false,
+        };
+        if matches_kind && !lemma_list.contains(&d.lemma().as_str().to_string()) {
+            lemma_list.push(d.lemma().as_str().to_string());
+        }
+    }
+    lemma_list
+}
+
+/// parse a SimpleReplaceDataLoader word file: `key=value1|value2` lines
+fn ar_parse_wordlist(data: &str) -> Vec<(String, Vec<String>)> {
+    data.lines()
+        .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+        .filter_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            let values: Vec<String> = v.split('|').map(|s| s.to_string()).collect();
+            Some((k.trim().to_string(), values))
+        })
+        .collect()
+}
+
+fn ar_wordlist_get<'a>(list: &'a [(String, Vec<String>)], key: &str) -> Option<&'a Vec<String>> {
+    list.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+}
+
+fn remove_tashkeel(word: &str) -> String {
+    word.chars()
+        .filter(|c| !matches!(*c, '\u{064B}'..='\u{0652}' | '\u{0670}'))
+        .collect()
+}
+
+const AR_TEH_MARBUTA: char = 'ة';
+const AR_FATHATAN: char = 'ً';
+const AR_ALEF: char = 'ا';
+
+fn ar_inflect_mafoul_mutlaq(word: &str) -> String {
+    let mut newword = word.to_string();
+    if word.ends_with(AR_TEH_MARBUTA) {
+        newword.push(AR_FATHATAN);
+    } else {
+        newword.push(AR_FATHATAN);
+        newword.push(AR_ALEF);
+    }
+    newword
+}
+
+fn ar_inflect_adjective_tanwin_nasb(word: &str, feminin: bool) -> String {
+    let mut newword = word.to_string();
+    if feminin {
+        if word.ends_with(AR_TEH_MARBUTA) {
+            newword.push(AR_FATHATAN);
+        } else {
+            newword.push(AR_TEH_MARBUTA);
+            newword.push(AR_FATHATAN);
+        }
+    } else if word.ends_with(AR_TEH_MARBUTA) {
+        newword = word.replace(AR_TEH_MARBUTA, "");
+    } else {
+        newword.push(AR_FATHATAN);
+        newword.push(AR_ALEF);
+    }
+    newword
+}
+
+fn ar_masdar_to_verb(ctx: &mut FilterCtx, _replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.matched_token_refs();
+    if tokens.len() < 2 {
+        return None;
+    }
+    let synth = ctx.synth?;
+    let aux_verb_lemmas_all = ar_get_lemmas(tokens[0], "verb");
+    // only authorized auxiliary lemmas are used
+    let aux_verb_lemmas: Vec<&String> = aux_verb_lemmas_all
+        .iter()
+        .filter(|l| l.as_str() == "قَامَ")
+        .collect();
+    let masdar_lemmas = ar_get_lemmas(tokens[1], "masdar");
+
+    static MASDAR2VERB: once_cell::sync::Lazy<Vec<(String, Vec<String>)>> =
+        once_cell::sync::Lazy::new(|| {
+            ar_parse_wordlist(include_str!("../../configs/ar/arabic_masdar_verb.txt"))
+        });
+
+    let mut verb_list: Vec<String> = Vec::new();
+    for d in tokens[0].word().tags().iter() {
+        let lemma = d.lemma().as_str();
+        if !aux_verb_lemmas.iter().any(|l| l.as_str() == lemma) {
+            continue;
+        }
+        for masdar_lemma in &masdar_lemmas {
+            let verb_lemmas = ar_wordlist_get(&MASDAR2VERB, masdar_lemma)
+                .or_else(|| ar_wordlist_get(&MASDAR2VERB, &remove_tashkeel(masdar_lemma)));
+            if let Some(verb_lemmas) = verb_lemmas {
+                for vrb in verb_lemmas {
+                    verb_list.extend(ar_inflect_lemma_like(
+                        ctx,
+                        synth,
+                        vrb,
+                        tokens[0].word().as_str(),
+                        d.pos().as_str(),
+                    ));
+                }
+            }
+        }
+    }
+    verb_list.sort();
+    verb_list.dedup();
+    Some(JavaOutcome {
+        span: ctx.span.clone(),
+        replacements: verb_list,
+        message: None,
+    })
+}
+
+fn ar_verb_to_mafoul_mutlaq(ctx: &mut FilterCtx, _replacements: Vec<String>) -> Option<JavaOutcome> {
+    let tokens = ctx.matched_token_refs();
+    if tokens.is_empty() {
+        return None;
+    }
+    let verb = ctx.arg("verb")?;
+    let adj = ctx.arg("adj")?;
+    let verb_lemmas = ar_get_lemmas(tokens[0], "verb");
+
+    static VERB2MASDAR: once_cell::sync::Lazy<Vec<(String, Vec<String>)>> =
+        once_cell::sync::Lazy::new(|| {
+            ar_parse_wordlist(include_str!("../../configs/ar/arabic_verb_masdar.txt"))
+        });
+
+    let inflected_adj_masc = ar_inflect_adjective_tanwin_nasb(&adj, false);
+    let inflected_adj_fem = ar_inflect_adjective_tanwin_nasb(&adj, true);
+
+    let mut inflected_masdar_list: Vec<String> = Vec::new();
+    let mut inflected_adj_list: Vec<String> = Vec::new();
+    for lemma in &verb_lemmas {
+        let msdr_list = ar_wordlist_get(&VERB2MASDAR, lemma)
+            .or_else(|| ar_wordlist_get(&VERB2MASDAR, &remove_tashkeel(lemma)));
+        if let Some(msdr_list) = msdr_list {
+            for msdr in msdr_list {
+                let inflected_masdar = ar_inflect_mafoul_mutlaq(msdr);
+                inflected_masdar_list.push(inflected_masdar);
+                let inflected_adj = if msdr.ends_with(AR_TEH_MARBUTA) {
+                    inflected_adj_fem.clone()
+                } else {
+                    inflected_adj_masc.clone()
+                };
+                inflected_adj_list.push(inflected_adj);
+            }
+        }
+    }
+    let mut suggestions: Vec<String> = Vec::new();
+    for (i, msdr) in inflected_masdar_list.iter().enumerate() {
+        let sug_phrase = format!("{} {} {}", verb, msdr, inflected_adj_list[i]);
+        if !suggestions.contains(&sug_phrase) {
+            suggestions.push(sug_phrase);
+        }
+    }
+    Some(JavaOutcome {
+        span: ctx.span.clone(),
+        replacements: suggestions,
+        message: None,
+    })
+}
+
+fn ar_adjective_to_exclamation(
+    ctx: &mut FilterCtx,
+    _replacements: Vec<String>,
+) -> Option<JavaOutcome> {
+    let _adj = ctx.arg("adj")?;
+    let noun = ctx.arg("noun")?;
+    let adj_pos: usize = ctx.arg("adj_pos")?.parse().ok()?;
+    let tokens = ctx.matched_token_refs();
+    let adj_token_index = adj_pos.saturating_sub(1);
+    if adj_token_index >= tokens.len() {
+        return None;
+    }
+    let adj_lemmas = ar_get_lemmas(tokens[adj_token_index], "adj");
+
+    static ADJ2COMP: once_cell::sync::Lazy<Vec<(String, Vec<String>)>> =
+        once_cell::sync::Lazy::new(|| {
+            ar_parse_wordlist(include_str!("../../configs/ar/arabic_adjective_exclamation.txt"))
+        });
+
+    let mut comp_list: Vec<String> = Vec::new();
+    for adj_lemma in &adj_lemmas {
+        if let Some(comparatives) =
+            ar_wordlist_get(&ADJ2COMP, adj_lemma).or_else(|| ar_wordlist_get(&ADJ2COMP, &remove_tashkeel(adj_lemma)))
+        {
+            comp_list.extend(comparatives.iter().cloned());
+        }
+    }
+    comp_list.sort();
+    comp_list.dedup();
+
+    let mut suggestions: Vec<String> = Vec::new();
+    for comp in &comp_list {
+        let mut suggestion = comp.clone();
+        if noun.is_empty() {
+            // nothing to append
+        } else if ["هو", "هي", "هم", "هما", "أنا"].contains(&noun.as_str()) {
+            let attached = match noun.as_str() {
+                "أنا" => "ني",
+                "نحن" => "نا",
+                "هو" => "ه",
+                "هي" => "ها",
+                "هم" => "هم",
+                "هن" => "هن",
+                "أنتما" => "كما",
+                "أنتم" => "كم",
+                "أنتن" => "كن",
+                _ => "",
+            };
+            suggestion.push_str(attached);
+        } else {
+            if !comp.ends_with(" ب") {
+                suggestion.push(' ');
+            }
+            suggestion.push_str(&noun);
+        }
+        suggestions.push(suggestion);
+    }
+    Some(JavaOutcome {
+        span: ctx.span.clone(),
+        replacements: suggestions,
+        message: None,
+    })
+}
+
+// ===== English AdverbFilter =====
+
+fn adverb2adj(adverb: &str) -> Option<&'static str> {
+    Some(match adverb {
+        "well" => "good",
+        "fast" | "hard" | "late" | "early" | "daily" | "straight" => adverb_per(adverb),
+        "simply" => "simple",
+        "cheaply" => "cheap",
+        "quickly" => "quick",
+        "slowly" => "slow",
+        "easily" => "easy",
+        "angrily" => "angry",
+        "happily" => "happy",
+        "luckily" => "lucky",
+        "terribly" => "terrible",
+        "tragically" => "tragic",
+        "economically" => "economic",
+        "greatly" => "great",
+        "highly" => "high",
+        "generally" => "general",
+        "differently" => "different",
+        "rightly" => "right",
+        "largely" => "large",
+        "really" => "real",
+        "philosophically" => "philosophical",
+        "directly" => "direct",
+        "clearly" => "clear",
+        "merely" => "mere",
+        "exactly" => "exact",
+        "recently" => "recent",
+        "rapidly" => "rapid",
+        "suddenly" => "sudden",
+        "extremely" => "extreme",
+        "properly" => "proper",
+        "politically" => "political",
+        "probably" => "probable",
+        "self-consciously" => "self-conscious",
+        "successfully" => "successful",
+        "unusually" => "unusual",
+        "obviously" => "obvious",
+        "currently" => "current",
+        "residentially" => "residential",
+        "fully" => "full",
+        "accidentally" => "accidental",
+        "medicinally" => "medicinal",
+        "automatically" => "automatic",
+        "completely" => "complete",
+        "chronologically" => "chronological",
+        "accurately" => "accurate",
+        "necessarily" => "necessary",
+        "temporarily" => "temporary",
+        "significantly" => "significant",
+        "hastily" => "hasty",
+        "immediately" => "immediate",
+        "rarely" => "rare",
+        "totally" => "total",
+        "literally" => "literal",
+        "gently" => "gentle",
+        "finally" => "final",
+        "increasingly" => "increasing",
+        "decreasingly" => "decreasing",
+        "considerably" => "considerable",
+        "effectively" => "effective",
+        "briefly" => "brief",
+        "exceedingly" => "exceeding",
+        "physically" => "physical",
+        "enthusiastically" => "enthusiastic",
+        "incredibly" => "incredible",
+        "permanently" => "permanent",
+        "entirely" => "entire",
+        "surely" => "sure",
+        "positively" => "positive",
+        "negatively" => "negative",
+        "devastatingly" => "devastating",
+        "relatively" => "relative",
+        "absolutely" => "absolute",
+        "socially" => "social",
+        "industriously" => "industrious",
+        "solely" => "sole",
+        "asynchronously" => "asynchronous",
+        "fortunately" => "fortunate",
+        "unfortunately" => "unfortunate",
+        "ideally" => "ideal",
+        "privately" => "private",
+        "unreasonably" => "unreasonable",
+        "personally" => "personal",
+        "basically" => "basic",
+        "definitely" => "definite",
+        "potentially" => "potential",
+        "manually" => "manual",
+        "continuously" => "continuous",
+        "sadly" => "sad",
+        "eventually" => "eventual",
+        "possibly" => "possible",
+        "visually" => "visual",
+        "predominantly" | "predominately" => "predominant",
+        "quietly" => "quiet",
+        "slightly" => "slight",
+        "cleverly" => "clever",
+        "roughly" => "rough",
+        "environmentally" => "environmental",
+        "geographically" => "geographical",
+        "usually" => "usual",
+        "normally" => "normal",
+        "deliciously" => "delicious",
+        "steadily" => "steady",
+        "actively" => "active",
+        "schematically" => "schematic",
+        "mindfully" => "mindful",
+        "statistically" => "statistical",
+        "culturally" => "cultural",
+        "vicariously" => "vicarious",
+        "vividly" => "vivid",
+        "partially" | "partly" => "partial",
+        "seriously" => "serious",
+        "non-verbally" => "non-verbal",
+        "nonverbally" => "nonverbal",
+        "verbally" => "verbal",
+        "shortly" => "short",
+        "mildly" => "mild",
+        "secretly" => "secret",
+        "especially" => "especial",
+        "specially" => "special",
+        "previously" => "previous",
+        "whitely" => "white",
+        "traditionally" => "traditional",
+        "individually" => "individual",
+        "carefully" => "careful",
+        "essentially" => "essential",
+        "originally" => "original",
+        "alarmingly" => "alarming",
+        "newly" => "new",
+        "wrongfully" => "wrongful",
+        "structurally" => "structural",
+        "globally" => "global",
+        "pacifically" => "pacific",
+        "seemingly" => "seeming",
+        "seamlessly" => "seamless",
+        "sustainably" => "sustainable",
+        "momentarily" => "momentary",
+        "coldly" => "cold",
+        "densely" => "dense",
+        "grimly" => "grim",
+        "calmly" => "calm",
+        "racially" => "racial",
+        "widely" => "wide",
+        "heavily" => "heavy",
+        "authentically" => "authentic",
+        "honestly" => "honest",
+        "desperately" => "desperate",
+        "immensely" => "immense",
+        "apparently" => "apparent",
+        "straightforwardly" => "straightforward",
+        "anatomically" => "anatomical",
+        "uniquely" => "unique",
+        "systemically" => "systemic",
+        "jokily" => "jokey",
+        "critically" => "critical",
+        "equally" => "equal",
+        "strongly" => "strong",
+        "purposely" => "intentional",
+        "thoroughly" => "thorough",
+        "outwardly" | "outwards" => "outward",
+        "horizontally" => "horizontal",
+        "vertically" => "vertical",
+        "technically" => "technical",
+        "swiftly" => "swift",
+        "accessibly" => "accessible",
+        "occasionally" => "occasional",
+        "specifically" => "specific",
+        "subtly" => "subtle",
+        "actually" => "actual",
+        "particularly" => "particular",
+        "gloomily" => "gloomy",
+        "nicely" => "nice",
+        "progressively" => "progressive",
+        "genuinely" => "genuine",
+        "characteristically" | "uncharacteristically" => {
+            if adverb == "characteristically" {
+                "characteristic"
+            } else {
+                "uncharacteristic"
+            }
+        }
+        "deeply" => "deep",
+        "spiritually" => "spiritual",
+        "purely" => "pure",
+        "satisfyingly" => "satisfying",
+        "indolently" => "indolent",
+        "obliquely" => "oblique",
+        "preferably" => "preferable",
+        "oddly" => "odd",
+        "professionally" => "professional",
+        "indispensably" => "indispensable",
+        "dispensably" => "dispensable",
+        "consistently" => "consistent",
+        "truly" => "true",
+        "commonly" => "common",
+        "safely" => "safe",
+        "evolutionarily" => "evolutionary",
+        "internally" => "internal",
+        "magically" => "magical",
+        "annually" => "annual",
+        "brightly" => "bright",
+        "officially" => "official",
+        "inofficially" => "inofficial",
+        "perfectly" => "perfect",
+        "overly" => "over",
+        "tropically" => "tropical",
+        "brilliantly" => "brilliant",
+        "exclusively" => "exclusive",
+        "commercially" => "commercial",
+        "mischievously" => "mischievous",
+        "weirdly" => "weird",
+        "routinely" => "routine",
+        "gruffly" => "gruff",
+        "naturally" => "natural",
+        "lightly" => "light",
+        "haphazardly" => "haphazard",
+        "lovingly" => "loving",
+        "sagely" => "sage",
+        "systematically" => "systematical",
+        "academically" => "academical",
+        "jokingly" => "joking",
+        "primarily" => "primary",
+        "secondarily" => "secondary",
+        "peacefully" => "peaceful",
+        "thankfully" => "thankful",
+        "reliably" => "reliable",
+        "unreliably" => "unreliable",
+        "infinitesimally" => "infinitesimal",
+        "hugely" => "huge",
+        "strictly" => "strict",
+        "morally" => "moral",
+        "involuntarily" => "involuntary",
+        "voluntarily" => "voluntary",
+        "vanishingly" => "vanishing",
+        "typically" => "typical",
+        "playfully" => "playful",
+        "wonderfully" => "wonderful",
+        "roguishly" => "roguish",
+        "emotionally" => "emotional",
+        "efficiently" => "efficient",
+        "unkindly" => "unkind",
+        "mentally" => "mental",
+        "credibly" => "credible",
+        "seductively" => "seductive",
+        "rashly" => "rash",
+        "periodically" => "periodical",
+        "comparatively" => "comparative",
+        "confidentially" => "confidential",
+        "dominantly" => "dominant",
+        "forcibly" => "forcible",
+        "formerly" => "former",
+        "financially" => "financial",
+        "urgently" => "urgent",
+        "inherently" => "inherent",
+        "historically" => "historical",
+        "tightly" => "tight",
+        "greedily" => "greedy",
+        "fluently" => "fluent",
+        "ordinarily" => "ordinary",
+        "inevitably" => "inevitable",
+        "liquidly" => "liquid",
+        "supremely" => "supreme",
+        "initially" => "initial",
+        "unjustly" => "unjust",
+        "justly" => "just",
+        "plausibly" => "plausible",
+        "amiably" => "amiable",
+        "massively" => "massive",
+        "lowly" => "low",
+        "notoriously" => "notorious",
+        "meaningfully" => "meaningful",
+        "approximately" => "approximate",
+        "extraordinarily" => "extraordinary",
+        "warmly" => "warm",
+        "nearly" => "near",
+        "strategically" => "strategical",
+        "endlessly" => "endless",
+        "virtually" => "virtual",
+        "regularly" => "regular",
+        "deliberately" => "deliberate",
+        "reasonably" => "reasonable",
+        "similarly" => "similar",
+        "flexibly" => "flexible",
+        "softly" => "soft",
+        "responsibly" => "responsible",
+        "irresponsibly" => "irresponsible",
+        "sweetly" => "sweet",
+        "comfortably" => "comfortable",
+        "uncomfortably" => "uncomfortable",
+        "intricately" => "intricate",
+        "unnecessarily" => "unnecessary",
+        "obstinately" => "obstinate",
+        "reportedly" => "reported",
+        "loosely" => "loose",
+        "profusely" => "profuse",
+        "mortally" => "mortal",
+        "dynamically" => "dynamical",
+        "illegally" => "illegal",
+        "legally" => "legal",
+        "undoubtedly" => "undoubted",
+        "humanly" => "human",
+        "likewise" => "similar",
+        "intrinsically" => "intrinsic",
+        "substantially" => "substantial",
+        "suspiciously" => "suspicious",
+        "generationally" => "generational",
+        "loudly" => "loud",
+        "moderately" => "moderate",
+        "gravely" => "grave",
+        "temporally" => "temporal",
+        "digitally" => "digital",
+        "finely" => "fine",
+        "respectfully" => "respectful",
+        "questioningly" => "questioning",
+        "diagonally" => "diagonal",
+        "additionally" => "additional",
+        "sexually" => "sexual",
+        "remarkably" => "remarkable",
+        "acutely" => "acute",
+        "linearly" => "linear",
+        "perfunctorily" => "perfunctory",
+        "unbelievably" => "unbelievable",
+        "merrily" => "merry",
+        "beneath" => "below",
+        "lest" => "least",
+        "either" => "other",
+        "nasally" => "nasal",
+        "concretely" => "concrete",
+        "intuitively" => "intuitive",
+        "please" => "pleasing",
+        "intermediately" => "intermediate",
+        "powerfully" => "powerful",
+        "fairly" => "fair",
+        "wholly" => "whole",
+        "keenly" => "keen",
+        "unconsciously" => "unconscious",
+        "consciously" => "conscious",
+        "humanely" => "humane",
+        "honorably" => "honorable",
+        "rudely" => "rude",
+        "incorrectly" => "incorrect",
+        "correctly" => "correct",
+        "mistakenly" => "mistaken",
+        "wrongly" => "wrong",
+        "morosely" => "morose",
+        "worryingly" => "worrying",
+        "drastically" => "drastical",
+        "willingly" => "willing",
+        "additively" => "additive",
+        "drolly" => "droll",
+        "statically" => "statical",
+        "hopefully" => "hopeful",
+        "untruthfully" => "untruthful",
+        "truthfully" => "truthful",
+        "attractively" => "attractive",
+        "supposedly" => "supposed",
+        "overwhelmingly" => "overwhelming",
+        "imperfectly" => "imperfect",
+        "deftly" => "deft",
+        "wildly" => "wild",
+        "sheepishly" => "sheepish",
+        "hotly" => "hot",
+        "genetically" => "genetic",
+        "inexplicably" => "inexplicable",
+        "explicably" => "explicable",
+        "domestically" => "domestical",
+        "invisibly" => "invisible",
+        "visibly" => "visible",
+        "noteworthily" => "noteworthy",
+        "unexpectably" => "unexpectable",
+        "expectably" => "expectable",
+        "foreseeably" => "foreseeable",
+        "unforeseeably" => "unforeseeable",
+        "distinctly" => "distinct",
+        "unequivocally" => "unequivocal",
+        "signally" => "signal",
+        "medically" => "medical",
+        "certainly" => "certain",
+        "beautifully" => "beautiful",
+        "firmly" => "firm",
+        "electrically" => "electrical",
+        "gradually" => "gradual",
+        "grossly" => "gross",
+        "memorably" => "memorable",
+        "unmemorably" => "unmemorable",
+        "shelly" => "shell",
+        "strangely" => "strange",
+        "unhealthily" => "unhealthy",
+        "healthily" => "healthy",
+        "harshly" => "harsh",
+        "proudly" => "proud",
+        "lately" => "late",
+        "remotely" => "remote",
+        "longly" => "long",
+        "politely" => "polite",
+        "ethically" => "ethical",
+        "noticeably" => "noticeable",
+        "unnoticeably" => "unnoticeable",
+        "consequently" => "consequent",
+        "snugly" => "snug",
+        "mainly" => "main",
+        "popularly" => "popular",
+        "improperly" => "improper",
+        "deliverly" => "delivery",
+        "rushingly" => "rushing",
+        "gravitationally" => "gravitational",
+        "cruelly" => "cruel",
+        "optimally" => "optimal",
+        "fictionally" => "fictional",
+        "manageably" => "manageable",
+        "unmanageably" => "unmanageable",
+        "fashionably" => "fashionable",
+        "secondly" => "second",
+        "thirdly" => "third",
+        "curtly" => "curt",
+        "secretively" => "secretive",
+        "surprisingly" => "surprising",
+        "sociologically" => "sociological",
+        "severely" => "severe",
+        "ruffianly" => "ruffian",
+        "bigly" => "big",
+        "frequently" => "frequent",
+        "irrationally" => "irrational",
+        "rationally" => "rational",
+        "riotously" => "riotous",
+        "excruciatingly" => "excruciating",
+        "intensively" => "intensive",
+        "separately" => "separate",
+        "favorably" => "favorable",
+        "favourably" => "favourable",
+        "unfavorably" => "unfavorable",
+        "unfavourably" => "unfavourable",
+        "fittingly" => "fitting",
+        "orally" => "oral",
+        "jointly" => "joint",
+        "methodically" => "methodical",
+        "ecologically" => "ecological",
+        "irrepressibly" => "irrepressible",
+        "repressibly" => "repressible",
+        "heartily" => "hearty",
+        "smoothly" => "smooth",
+        "dreamily" => "dreamy",
+        "indirectly" => "indirect",
+        "fascinatingly" => "fascinating",
+        "scientifically" => "scientific",
+        "unhappily" => "unhappy",
+        "publicly" => "public",
+        "healthfully" => "healthful",
+        "genially" => "genial",
+        "ineludibly" => "ineludible",
+        "tenderly" => "tender",
+        "arguably" => "arguable",
+        "comparably" => "comparable",
+        "procedurally" => "procedural",
+        "interchangeably" => "interchangeable",
+        "conceivably" => "conceivable",
+        "resignedly" => "resigned",
+        "vehemently" => "vehement",
+        "horribly" => "horrible",
+        "teasingly" => "teasing",
+        "figuratively" => "figurative",
+        "excitingly" => "exciting",
+        "haltingly" => "halting",
+        "phonetically" => "phonetic",
+        "proverbially" => "proverbial",
+        "informally" => "informal",
+        "cozily" => "cozy",
+        "cosily" => "cosy",
+        "constantly" => "constant",
+        "rightfully" => "rightful",
+        "reluctantly" => "reluctant",
+        "externally" => "external",
+        "intellectually" => "intellectual",
+        "dramatically" => "dramatic",
+        "freshly" => "fresh",
+        "casually" => "casual",
+        "unevenly" => "uneven",
+        "enormously" => "enormous",
+        "callously" => "callous",
+        "imperiously" => "imperious",
+        "messily" => "messy",
+        "alternatively" => "alternative",
+        "gladly" => "glad",
+        "adversely" => "adverse",
+        "petulantly" => "petulant",
+        "shakily" => "shaky",
+        "menacingly" => "menacing",
+        "consensually" => "consensual",
+        "bitterly" => "bitter",
+        "terminally" => "terminal",
+        "faintly" => "faint",
+        "brusquely" => "brusque",
+        "humbly" => "humble",
+        "promptly" => "prompt",
+        "identically" => "identical",
+        "militarily" => "military",
+        "neatly" => "neat",
+        "insanely" => "insane",
+        "analytically" => "analytical",
+        "firstly" => "first",
+        "twice" => "second",
+        _ => return None,
+    })
+}
+
+fn adverb_per(adverb: &str) -> &'static str {
+    match adverb {
+        "fast" => "fast",
+        "hard" => "hard",
+        "late" => "late",
+        "early" => "early",
+        "daily" => "daily",
+        "straight" => "straight",
+        _ => "",
+    }
+}
+
+fn adverb_filter_en(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let adverb = ctx.arg("adverb")?;
+    let noun = ctx.arg("noun")?;
+    if let Some(adjective) = adverb2adj(&adverb) {
+        if adjective != adverb {
+            return keep(ctx, vec![format!("{} {}", adjective, noun)]);
+        }
+    }
+    // no mapping: the original suggestion is kept untouched
+    keep(ctx, replacements)
 }

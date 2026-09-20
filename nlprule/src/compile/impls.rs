@@ -411,7 +411,12 @@ impl Rules {
                     let id = Category::new(category.id.as_str());
 
                     let id = if let Some(group) = &group {
-                        id.join(group.id.as_str()).join(group.n)
+                        // LT reports the sub-rule id when the rule inside a
+                        // group has its own id, otherwise the group id
+                        match rule_structure.id.as_ref() {
+                            Some(sub_id) => id.join(sub_id.as_str()).join(0),
+                            None => id.join(group.id.as_str()).join(group.n),
+                        }
                     } else {
                         id.join(
                             rule_structure
@@ -963,8 +968,28 @@ pub(in crate::compile) mod filters {
         engine: &Engine,
     ) -> Result<Filter, Error> {
         match name {
-            "NoDisambiguationEnglishPartialPosTagFilter" => {
+            "NoDisambiguationEnglishPartialPosTagFilter"
+            | "NoDisambiguationRussianPartialPosTagFilter"
+            | "NoDisambiguationIrishPartialPosTagFilter"
+            | "NoDisambiguationPortuguesePartialPosTagFilter" => {
                 Ok(NoDisambiguationEnglishPartialPosTagFilter::from_args(args, engine)?.into())
+            }
+            "IsEnglishWordFilter" => {
+                let mut ids = Vec::new();
+                for pos in args
+                    .get("formPositions")
+                    .ok_or_else(|| {
+                        Error::Unexpected("IsEnglishWordFilter must have `formPositions` argument".into())
+                    })?
+                    .split(',')
+                {
+                    ids.push(engine.to_graph_id(pos.trim().parse::<usize>().map_err(|_| {
+                        Error::Unexpected("invalid formPositions in IsEnglishWordFilter".into())
+                    })?)?);
+                }
+                Ok(crate::filter::Filter::IsEnglishWordFilter(
+                    crate::filter::IsEnglishWordFilter { ids },
+                ))
             }
             _ => Err(Error::Unexpected(format!("unsupported filter {}", name))),
         }
