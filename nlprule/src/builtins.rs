@@ -359,6 +359,12 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         // de disabled: GermanSpellerRule decomposes compounds before looking
         // them up; without that port every non-listed compound would over-fire
         // "de" => SpellingRuleConfig { id: "MORFOLOGIK_RULE_DE_DE", ... },
+        "ar" => SpellingRuleConfig {
+            id: "HUNSPELL_RULE_AR",
+            latin_script: false,
+            ignore: spelling_lists!("ar", "ignore.txt", "spelling.txt", "spelling_custom.txt"),
+            prohibit: spelling_lists!("ar", "prohibit.txt", "prohibit_custom.txt"),
+        },
         "en" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_EN_US",
             latin_script: true,
@@ -476,6 +482,13 @@ pub(crate) fn morfologik_spelling(
         {
             continue;
         }
+        // ArabicHunspellSpellerRule strips tashkeel before every lookup
+        let word = if lang == "ar" {
+            crate::tokenizer::ar_stem::remove_tashkeel(word)
+        } else {
+            word.to_string()
+        };
+        let word = word.as_str();
         let prohibited = config.prohibit.contains(&word);
         if speller.is_known(word) && !prohibited {
             continue;
