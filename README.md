@@ -279,10 +279,14 @@ Language-specific notes:
   frequency list of the 20k most common English words)
 - Still unported: `en`'s chunker (4.8k chunk references in `grammar.xml` need
   a port of LT's OpenNLP chunker models; the runtime chunk matcher exists),
-  ar ArabicNumberPhraseFilter (needs ArabicNumbersWords), pt
-  BrazilianToponymFilter (LT `<regexp>` rules are a separate rule type),
+  ar ArabicNumberPhraseFilter (needs ArabicNumbersWords) and
+  `HUNSPELL_RULE_AR` (hunspell affix expansion of `ar.dic`), de's
+  `MORFOLOGIK_RULE_DE_DE` (needs GermanSpellerRule's compound decomposition),
+  pt BrazilianToponymFilter (LT `<regexp>` rules are a separate rule type),
   WordWithDeterminer's `suggestionHasNoErrors` re-validation, and rules that
-  are pure Java in LT with no XML (spellers, pl stemmer rules)
+  are pure Java in LT with no XML (pl stemmer rules, the remaining
+  language-specific speller subclasses like en's hyphen splitting and
+  pt's dialect rule)
 
 ### Performance vs the LanguageTool server
 
