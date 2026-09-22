@@ -186,26 +186,46 @@ ar 85.2%, es 78.1%, ca 75.3%.
 ### Live comparison against the LanguageTool HTTP server
 
 `build/compare_server.py` sends each language's embedded example sentences
-(unique, up to 1500 per language) to a local instance of the official
+(unique, up to 1000 per language) to a local instance of the official
 LanguageTool 6.5 HTTP server and to nlprule, and compares the rule IDs that
 fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 
 | lang | sentences | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
 |------|-----------|--------------|---------|--------------------|----------------|---------|
-| de   | 1500      | 55           | 161     | 0.92               | 0.80           | 0.89    |
-| en   | 1500      | 50           | 397     | 0.92               | 0.59           | 0.74    |
-| ru   | 1046      | 68           | 243     | 0.91               | 0.73           | 0.77    |
+| uk   | 1000      | 19           | 175     | 0.97               | 0.77           | 0.83    |
+| en   | 1000      | 33           | 234     | 0.93               | 0.66           | 0.77    |
+| de   | 1000      | 37           | 73      | 0.89               | 0.80           | 0.93    |
+| ru   | 1000      | 91           | 236     | 0.87               | 0.72           | 0.74    |
+| es   | 1000      | 96           | 136     | 0.86               | 0.81           | 0.86    |
 | ar   | 616       | 32           | 228     | 0.84               | 0.42           | 0.63    |
-| es   | 1500      | 115          | 219     | 0.87               | 0.78           | 0.86    |
-| pt   | 1500      | 78           | 488     | 0.89               | 0.57           | 0.68    |
-| uk   | 1457      | 170          | 409     | 0.81               | 0.64           | 0.72    |
-| fr   | 1500      | 185          | 448     | 0.72               | 0.51           | 0.70    |
-| ca   | 1500      | 311          | 493     | 0.59               | 0.48           | 0.66    |
+| pt   | 1000      | 59           | 421     | 0.80               | 0.36           | 0.57    |
+| fr   | 1000      | 118          | 307     | 0.73               | 0.51           | 0.69    |
+| ca   | 1000      | 216          | 293     | 0.59               | 0.51           | 0.69    |
 
-nlprule rarely fires rules that LT does not fire (precision 0.72-0.92). The
-recall gap is dominated by rules that are pure Java classes in LT with no XML
-representation (spellcheckers, `pl`'s stemmer-based rules, `en`'s chunker
-rules) and by the deep linguistic filters listed below.
+nlprule rarely fires rules that LT does not fire (precision 0.59-0.97).
+`build/gap_analysis.py` aggregates which rule IDs the server fires but nlprule
+does not (400 sentences per language); the recall gap decomposes into:
+
+- `UPPERCASE_SENTENCE_START` is the single largest missing ID in 7 of 9
+  languages (124 hits in `pt`, 59 `ru`, 47 `en`, 36 `fr`, 26 `de`, 17 `ca`,
+  8 `es` per 400 sentences). It is one of LT's generic Java built-ins with no
+  XML representation, not a pattern rule.
+- Java-only spellcheckers: `MORFOLOGIK_RULE_{PT,ES,RU}`, `HUNSPELL_RULE_AR`,
+  `*_SPELLING_RULE` (de), `FR_SPELLING_RULE` — these need the binary
+  Morfologik/hunspell dictionaries that ship only inside the LT jar.
+- `en`: the remaining gap is the OpenNLP chunker (see below) plus
+  speller-backed rules (`EN_CONTRACTION_SPELLING`, `EN_SPLIT_WORDS_HYPHEN`).
+- `fr`: `D_N`/`D_N_E_OU_E` determiner-noun agreement (56+22 hits) — the
+  French tagger/disambiguator assigns different readings, so the pattern
+  rules don't fire on our tags.
+- `pt`: after `UPPERCASE_SENTENCE_START` (124) and the Morfologik speller,
+  the remainder is small; `pt` also runs Java proclisis/enclisis helpers.
+- `es`/`ca`: much of the mismatch is the same error caught by a
+  variant-specific rule (LT fires `HOLA_COMO_ESTAS` where nlprule fires
+  `OLA_HOLA`; both directions of `CONCORDANCES_DET_NOM` in ca), i.e. tagger
+  differences rather than missing rules.
+- `pl`'s stemmer-based rules and the other Java-only rule classes listed
+  below.
 
 Language-specific notes:
 - `ja` uses lindera with the ipadic dictionary (the same dictionary data LT uses
@@ -252,22 +272,31 @@ Language-specific notes:
 
 ### Performance vs the LanguageTool server
 
-`build/bench_server.py` (150 example sentences per language, same machine,
-single thread; LT via its local HTTP server, nlprule in-process):
+`build/bench_server.py` (300 example sentences per language, single thread,
+same machine; LT 6.5 via its local HTTP server at standard level — HTTP + JVM
+overhead included, as a real client sees it — nlprule in-process):
 
-| lang | nlprule p50/sentence | nlprule p95 | nlprule throughput | LT server p50 | LT server p95 | LT throughput | nlprule RSS | LT JVM RSS |
-|------|----------------------|-------------|--------------------|---------------|---------------|---------------|-------------|------------|
-| en   | 1 ms                 | 3 ms        | 611 sents/s        | 11 ms         | 15 ms         | 63 sents/s    | 231 MB      | ~2.5 GB    |
-| de   | 1 ms                 | 3 ms        | 758 sents/s        | 17 ms         | 32 ms         | 53 sents/s    | 353 MB      | ~2.5 GB    |
-| fr   | 1 ms                 | 3 ms        | 625 sents/s        | 1949 ms       | 2272 ms       | 0.5 sents/s   | 293 MB      | ~2.5 GB    |
-| es   | 1 ms                 | 2 ms        | 178 sents/s*       | 12 ms         | 42 ms         | 64 sents/s    | 1.2 GB      | ~2.5 GB    |
-| ca   | 2 ms                 | 5 ms        | 375 sents/s        | 29 ms         | 35 ms         | 34 sents/s    | 414 MB      | ~2.5 GB    |
+| lang | nlprule p50/sent | p95 | throughput | LT p50/sent | p95 | throughput | speedup | nlprule RSS | LT JVM RSS |
+|------|------------------|-----|------------|-------------|-----|------------|---------|-------------|------------|
+| ar   | 0 ms             | 1 ms | 2088 sents/s | 120 ms   | 161 ms  | 7.8 sents/s   | ~270x  | 457 MB      | ~3.2 GB    |
+| ru   | 1 ms             | 1 ms | 1579 sents/s | 361 ms   | 553 ms  | 2.5 sents/s   | ~630x  | 1.3 GB      | ~3.0 GB    |
+| pt   | 1 ms             | 3 ms | 577 sents/s  | 953 ms   | 1201 ms | 1.0 sents/s   | ~580x  | 3.3 GB      | ~3.0 GB    |
+| uk   | 2 ms             | 3 ms | 562 sents/s  | 996 ms   | 1248 ms | 1.0 sents/s   | ~560x  | 1.3 GB      | ~3.1 GB    |
+| en   | 2 ms             | 5 ms | 362 sents/s  | 14 ms    | 23 ms   | 66 sents/s    | 5.5x   | 254 MB      | ~2.8 GB    |
+| fr   | 3 ms             | 5 ms | 337 sents/s  | 2074 ms  | 2723 ms | 0.5 sents/s   | ~670x  | 329 MB      | ~2.8 GB    |
+| de   | 1 ms             | 2 ms | 285 sents/s  | 19 ms    | 34 ms   | 23 sents/s    | 12x    | 412 MB      | ~2.3 GB    |
+| ca   | 4 ms             | 9 ms | 201 sents/s  | 29 ms    | 44 ms   | 27 sents/s    | 7x     | 438 MB      | ~2.9 GB    |
+| es   | 1 ms             | 3 ms | 60 sents/s*  | 14 ms    | 34 ms   | 54 sents/s    | 1.1x   | 1.2 GB      | ~1.4 GB    |
 
-nlprule loads its binaries in 0.6-3.1 s per language and is 10-4000x faster per
-sentence. (*`es` mean is 5.6 ms: sentences that hit the FindSuggestions
-full-scan fallback over the 3.4M-form speller dominate; p50 is 1 ms.)
-nlprule fires more matches than the server because it applies rules that LT
-disables by default (`default="off"`).
+nlprule loads its binaries in 0.6-14 s per language and checks every language
+at sub-10 ms p95 latency; the LT server needs 0.5-2.7 s per sentence on
+fr/pt/uk/ru even at the standard (non-picky) level. (*`es` p50 is 1 ms but
+the mean is 16.6 ms: sentences that hit the FindSuggestions full-scan fallback
+over the 3.4M-form speller dominate; `pt`'s 3.3 GB RSS and 14 s load come
+from its large disambiguation data.) nlprule fires more matches than the
+server because it applies rules that LT disables by default (`default="off"`).
+The LT JVM RSS is cumulative: the single server process keeps every language
+loaded.
 
 With the original LT 5.2-based build directories, English passes 4192/4226 (99.2%) of its
 example tests and German 3799/3903 (97.3%).

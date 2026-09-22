@@ -50,7 +50,7 @@ def examples_from_grammar(path, limit):
 
 def lt_check(port, lang, text):
     data = urllib.parse.urlencode(
-        {"text": text, "language": lang, "enabledOnly": "false", "level": "picky"}
+        {"text": text, "language": lang, "enabledOnly": "false"}
     ).encode()
     req = urllib.request.Request(
         f"http://localhost:{port}/v2/check", data=data, method="POST"

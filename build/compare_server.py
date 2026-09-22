@@ -53,7 +53,6 @@ def lt_matches(port, lang, text):
             "text": text,
             "language": lang,
             "enabledOnly": "false",
-            "level": "picky",
         }
     ).encode()
     req = urllib.request.Request(
