@@ -40,6 +40,12 @@ pub struct Rules {
     /// Shared auxiliary data for the ported Java rule filters.
     pub(crate) filter_data: crate::rule::filter_data::FilterData,
     pub(crate) rules: Vec<Rule>,
+    /// Language code of this rule set, used by the built-in Java-only rules
+    /// (e.g. `UPPERCASE_SENTENCE_START`). Not serialized: set it with
+    /// [Rules::with_lang] (built-ins degrade to language-independent
+    /// behavior when unset).
+    #[serde(skip)]
+    pub(crate) builtin_lang: Option<String>,
     /// Shared morphological synthesizer used by rules to inflect lemmas in suggestions.
     pub(crate) synth: Option<std::sync::Arc<crate::rule::synthesizer::Synthesizer>>,
 }
@@ -53,6 +59,16 @@ impl Rules {
     pub fn new<P: AsRef<Path>>(p: P) -> Result<Self, Error> {
         let reader = BufReader::new(File::open(p.as_ref())?);
         let rules: Rules = bincode::deserialize_from(reader)?;
+        Ok(rules)
+    }
+
+    /// Creates a new rule set from a path to a binary, recording the language
+    /// code so the built-in Java-only rules (`UPPERCASE_SENTENCE_START`, ...)
+    /// can apply their language-specific behavior. The language is never
+    /// serialized with the binary.
+    pub fn with_lang<P: AsRef<Path>>(p: P, lang: &str) -> Result<Self, Error> {
+        let mut rules = Self::new(p)?;
+        rules.builtin_lang = Some(lang.to_string());
         Ok(rules)
     }
 
@@ -104,10 +120,23 @@ impl Rules {
     }
 
     /// Compute the suggestions for the given sentence by checking all rules.
-    /// Builtin rules that are Java classes in LT (no XML): duplicated words
-    /// and doubled punctuation.
-    fn builtin_suggestions(&self, sentence: &Sentence) -> Vec<Suggestion> {
-        let mut out = Vec::new();
+    /// Builtin rules that are Java classes in LT (no XML): duplicated words,
+    /// doubled punctuation and sentence-start casing.
+    fn builtin_suggestions(
+        &self,
+        sentence: &Sentence,
+        ctx: &crate::builtins::TextRuleContext,
+    ) -> Vec<Suggestion> {
+        let mut out = crate::builtins::uppercase_sentence_start(
+            sentence,
+            self.builtin_lang.as_deref(),
+            ctx,
+        );
+        out.extend(crate::builtins::morfologik_spelling(
+            sentence,
+            self.builtin_lang.as_deref(),
+            self.filter_data.speller.as_ref(),
+        ));
         let tokens: Vec<_> = sentence.iter().collect();
         if tokens.len() < 2 {
             return out;
@@ -165,6 +194,16 @@ impl Rules {
     }
 
     pub fn apply(&self, sentence: &Sentence) -> Vec<Suggestion> {
+        self.apply_with_context(sentence, &crate::builtins::TextRuleContext::default())
+    }
+
+    /// Like [Rules::apply], with the text-level context of the built-in rules
+    /// (position of this sentence within the checked text).
+    pub fn apply_with_context(
+        &self,
+        sentence: &Sentence,
+        ctx: &crate::builtins::TextRuleContext,
+    ) -> Vec<Suggestion> {
         let plain_sentence = sentence;
         let sentence = MatchSentence::new(sentence);
 
@@ -189,7 +228,7 @@ impl Rules {
             .flatten()
             .collect();
 
-        for (i, suggestion) in self.builtin_suggestions(plain_sentence)
+        for (i, suggestion) in self.builtin_suggestions(plain_sentence, ctx)
             .into_iter()
             .enumerate()
             .map(|(j, sugg)| (self.rules.len() + j, sugg))
@@ -231,9 +270,24 @@ impl Rules {
 
         let mut suggestions = Vec::new();
 
-        // get suggestions sentence by sentence
-        for sentence in tokenizer.pipe(text) {
-            suggestions.extend(self.apply(&sentence));
+        // get suggestions sentence by sentence, carrying the text-level state
+        // LT's text-level built-in rules see (previous sentence's last token,
+        // numbered-list detection)
+        let sentences: Vec<_> = tokenizer.pipe(text).collect();
+        let mut prev_last_token: Option<String> = None;
+        let mut prev_numbered_list = false;
+
+        for (i, sentence) in sentences.iter().enumerate() {
+            let ctx = crate::builtins::TextRuleContext {
+                is_only_sentence: sentences.len() == 1,
+                prev_last_token: prev_last_token.clone(),
+                prev_numbered_list,
+            };
+            suggestions.extend(self.apply_with_context(sentence, &ctx));
+
+            prev_last_token = crate::builtins::last_significant_token(sentence);
+            prev_numbered_list = crate::builtins::is_numbered_list_item(sentence.text());
+            let _ = i;
         }
 
         suggestions
@@ -315,6 +369,7 @@ where
             rules,
             synth: None,
             filter_data: Default::default(),
+            builtin_lang: None,
         }
     }
 }

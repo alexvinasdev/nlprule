@@ -25,7 +25,7 @@ def lt_matches(port, lang, text):
 
 lang, grammar, tok, rules, port, limit = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5]), int(sys.argv[6])
 sentences = examples_from_grammar(grammar, limit)
-proc = subprocess.run(["./target/release/check_server", tok, rules], input="\n".join(sentences), capture_output=True, text=True, check=True)
+proc = subprocess.run(["./target/release/check_server", tok, rules, lang], input="\n".join(sentences), capture_output=True, text=True, check=True)
 ours = {}
 for line in proc.stdout.splitlines():
     obj = json.loads(line); ours[obj["i"]] = set(h[0] for h in obj["hits"])

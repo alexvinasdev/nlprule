@@ -499,6 +499,7 @@ impl Rules {
             rules,
             synth: build_info.synthesizer().cloned(),
             filter_data,
+            builtin_lang: None,
         }
     }
 }

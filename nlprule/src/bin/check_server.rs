@@ -9,7 +9,12 @@ use std::io::{self, BufRead, Write};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let tokenizer = Tokenizer::new(&args[1]).unwrap();
-    let rules = Rules::new(&args[2]).unwrap();
+    // optional third argument: the language code, enables the language
+    // specific behavior of the built-in Java-only rules
+    let rules = match args.get(3) {
+        Some(lang) => Rules::with_lang(&args[2], lang).unwrap(),
+        None => Rules::new(&args[2]).unwrap(),
+    };
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -18,22 +23,20 @@ fn main() {
     for (i, line) in stdin.lock().lines().enumerate() {
         let text = line.unwrap();
         let mut hits: Vec<(String, usize, usize, String)> = Vec::new();
-        for sentence in tokenizer.pipe(&text) {
-            for suggestion in rules.apply(&sentence) {
-                // nlprule id format: CATEGORY/RULE_OR_GROUP/N -> LT id: RULE_OR_GROUP
-                let id = suggestion
-                    .source()
-                    .split('/')
-                    .nth(1)
-                    .unwrap_or(suggestion.source())
-                    .to_string();
-                hits.push((
-                    id,
-                    suggestion.span().byte().start,
-                    suggestion.span().byte().end,
-                    suggestion.replacements().first().cloned().unwrap_or_default(),
-                ));
-            }
+        for suggestion in rules.suggest(&text, &tokenizer) {
+            // nlprule id format: CATEGORY/RULE_OR_GROUP/N -> LT id: RULE_OR_GROUP
+            let id = suggestion
+                .source()
+                .split('/')
+                .nth(1)
+                .unwrap_or(suggestion.source())
+                .to_string();
+            hits.push((
+                id,
+                suggestion.span().byte().start,
+                suggestion.span().byte().end,
+                suggestion.replacements().first().cloned().unwrap_or_default(),
+            ));
         }
         serde_json::ser::to_writer(
             &mut out,

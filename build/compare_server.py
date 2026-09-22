@@ -80,7 +80,7 @@ def main():
         return
 
     proc = subprocess.run(
-        [args.bin, args.tokenizer, args.rules],
+        [args.bin, args.tokenizer, args.rules, args.lang],
         input="\n".join(sentences),
         capture_output=True,
         text=True,
