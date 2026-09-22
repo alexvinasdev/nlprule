@@ -192,40 +192,54 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 
 | lang | sentences | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
 |------|-----------|--------------|---------|--------------------|----------------|---------|
-| uk   | 1000      | 19           | 175     | 0.97               | 0.77           | 0.83    |
-| en   | 1000      | 33           | 234     | 0.93               | 0.66           | 0.77    |
-| de   | 1000      | 37           | 73      | 0.89               | 0.80           | 0.93    |
-| ru   | 1000      | 91           | 236     | 0.87               | 0.72           | 0.74    |
-| es   | 1000      | 96           | 136     | 0.86               | 0.81           | 0.86    |
-| ar   | 616       | 32           | 228     | 0.84               | 0.42           | 0.63    |
-| pt   | 1000      | 59           | 421     | 0.80               | 0.36           | 0.57    |
-| fr   | 1000      | 118          | 307     | 0.73               | 0.51           | 0.69    |
-| ca   | 1000      | 216          | 293     | 0.59               | 0.51           | 0.69    |
+| de   | 1000      | 11           | 16      | 0.97               | 0.96           | 0.98    |
+| uk   | 1000      | 38           | 29      | 0.95               | 0.96           | 0.96    |
+| es   | 1000      | 57           | 71      | 0.92               | 0.90           | 0.93    |
+| pt   | 1000      | 71           | 86      | 0.89               | 0.87           | 0.90    |
+| ru   | 1000      | 111          | 93      | 0.87               | 0.89           | 0.88    |
+| en   | 1000      | 100          | 104     | 0.85               | 0.85           | 0.88    |
+| fr   | 1000      | 104          | 141     | 0.82               | 0.77           | 0.85    |
+| ar   | 616       | 38           | 234     | 0.80               | 0.40           | 0.62    |
+| ca   | 1000      | 225          | 214     | 0.63               | 0.64           | 0.76    |
 
-nlprule rarely fires rules that LT does not fire (precision 0.59-0.97).
-`build/gap_analysis.py` aggregates which rule IDs the server fires but nlprule
-does not (400 sentences per language); the recall gap decomposes into:
+This includes the Java-only built-in rules that have no XML representation,
+ported to Rust (see "ported" below): `UPPERCASE_SENTENCE_START` (with the
+Ukrainian list-letter exception, pt dialogue dashes, nl `'k`-contraction and
+the cross-sentence state), the `MORFOLOGIK_RULE_*`/`FR_SPELLING_RULE`
+spelling rules on the exact morfologik dictionaries the server uses
+(`es-ES`, `ca-ES`, `fr`, `nl_NL`, `en_US`, `pt-BR`, `ru_RU`, `uk_UA`; the
+dictionaries were dumped from the LT distro jars with morfologik's own
+tools), the `immunize`/`ignore_spelling` disambiguation actions, and LT's
+`CleanOverlappingFilter` (the server always drops overlapping matches —
+longer match wins, then the later match).
 
-- `UPPERCASE_SENTENCE_START` is the single largest missing ID in 7 of 9
-  languages (124 hits in `pt`, 59 `ru`, 47 `en`, 36 `fr`, 26 `de`, 17 `ca`,
-  8 `es` per 400 sentences). It is one of LT's generic Java built-ins with no
-  XML representation, not a pattern rule.
-- Java-only spellcheckers: `MORFOLOGIK_RULE_{PT,ES,RU}`, `HUNSPELL_RULE_AR`,
-  `*_SPELLING_RULE` (de), `FR_SPELLING_RULE` — these need the binary
-  Morfologik/hunspell dictionaries that ship only inside the LT jar.
-- `en`: the remaining gap is the OpenNLP chunker (see below) plus
-  speller-backed rules (`EN_CONTRACTION_SPELLING`, `EN_SPLIT_WORDS_HYPHEN`).
-- `fr`: `D_N`/`D_N_E_OU_E` determiner-noun agreement (56+22 hits) — the
-  French tagger/disambiguator assigns different readings, so the pattern
-  rules don't fire on our tags.
-- `pt`: after `UPPERCASE_SENTENCE_START` (124) and the Morfologik speller,
-  the remainder is small; `pt` also runs Java proclisis/enclisis helpers.
-- `es`/`ca`: much of the mismatch is the same error caught by a
-  variant-specific rule (LT fires `HOLA_COMO_ESTAS` where nlprule fires
-  `OLA_HOLA`; both directions of `CONCORDANCES_DET_NOM` in ca), i.e. tagger
-  differences rather than missing rules.
-- `pl`'s stemmer-based rules and the other Java-only rule classes listed
-  below.
+`build/gap_analysis.py` aggregates which rule IDs the server fires but
+nlprule does not (400 sentences per language); the remaining gap decomposes
+into:
+
+- `ar` (recall 0.40): the `gender_*` agreement rules compile but don't fire
+  on our Arabic tag readings, plus `HUNSPELL_RULE_AR` (hunspell `ar.dic`
+  needs affix expansion), `ArabicNumberPhraseFilter` (needs
+  ArabicNumbersWords) and the Arabic chunker-less tagger differences.
+- `ca` (0.63/0.64): both directions of `CONCORDANCES_DET_NOM`,
+  `ANALISI_FEM`, `MUNICIPIS_VALENCIA` (external toponym data) and
+  `PRONOMS_FEBLES_SOLTS1` firing at different offsets — tagger/disambiguator
+  reading differences, not missing rules.
+- `fr` (0.82/0.77): `D_N`/`D_N_E_OU_E` determiner-noun agreement — the
+  French tagger assigns different readings, so the patterns don't fire on
+  our tags.
+- `en` (0.85/0.85): the OpenNLP chunker (2k `chunk=` references) plus
+  speller-backed rules (`EN_CONTRACTION_SPELLING`,
+  `EN_SPLIT_WORDS_HYPHEN`); a residue of `UPPERCASE_SENTENCE_START` from
+  sentence-split differences on short unpunctuated fragments.
+- `ru` (0.87/0.89): mostly tagger differences on the `giloj_gilichnij`
+  stemmer-like pairs and `MORFOLOGIK_RULE_RU_RU` suggestion-order details.
+- `es`/`pt`: small; much of it is the same error caught by a variant rule
+  (LT fires `HOLA_COMO_ESTAS` where nlprule fires `OLA_HOLA`).
+- `de`'s speller (`MORFOLOGIK_RULE_DE_DE`) is disabled: `GermanSpellerRule`
+  decomposes compounds before lookup and without that port every
+  non-listed compound would over-fire. `pl`'s stemmer-based rules and the
+  other Java-only rule classes listed below.
 
 Language-specific notes:
 - `ja` uses lindera with the ipadic dictionary (the same dictionary data LT uses
