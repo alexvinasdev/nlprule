@@ -53,6 +53,13 @@ pub enum Disambiguation {
     ),
     Unify(Vec<Vec<PosFilter>>, Vec<Option<PosFilter>>, Vec<bool>),
     Nop,
+    /// `action="immunize"`: mark matched tokens as immunized (skipped by the
+    /// text-level built-ins like LT's UPPERCASE_SENTENCE_START and speller).
+    /// Stored as the sentinel chunk `_immunized`.
+    Immunize,
+    /// `action="ignore_spelling"`: the speller must skip matched tokens.
+    /// Stored as the sentinel chunk `_ignore_spelling`.
+    IgnoreSpelling,
 }
 
 impl Disambiguation {
@@ -213,6 +220,20 @@ impl Disambiguation {
                 }
             }
             Disambiguation::Nop => {}
+            Disambiguation::Immunize | Disambiguation::IgnoreSpelling => {
+                let sentinel = match self {
+                    Disambiguation::Immunize => "_immunized",
+                    Disambiguation::IgnoreSpelling => "_ignore_spelling",
+                    _ => unreachable!(),
+                };
+                for group in groups.into_iter() {
+                    for token in group.into_iter() {
+                        if !token.chunks().contains(&sentinel.to_string()) {
+                            token.chunks_mut().push(sentinel.to_string());
+                        }
+                    }
+                }
+            }
         }
     }
 }

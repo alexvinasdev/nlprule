@@ -89,11 +89,16 @@ impl SpellerDict {
             }
         };
 
-        if lower.is_ascii() && !ignore_diacritics {
-            // the fst automaton is byte-based and matches the char-level
-            // neighborhood for ASCII queries
-            let automaton = Levenshtein::new(&lower, max_distance as u32)
-                .expect("valid Levenshtein automaton");
+        // the fst automaton is byte-based and matches the char-level
+        // neighborhood for ASCII queries; long words at distance 3 can
+        // exceed the automaton's state cap -> fall back to the full scan
+        let automaton = if lower.is_ascii() && !ignore_diacritics {
+            Levenshtein::new(&lower, max_distance as u32).ok()
+        } else {
+            None
+        };
+
+        if let Some(automaton) = automaton {
             debug_assert!(!ignore_diacritics || lower.chars().all(|c| c.is_ascii()));
             let mut stream = map.search(automaton).into_stream();
             while let Some((key, value)) = stream.next() {

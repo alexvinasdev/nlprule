@@ -165,6 +165,17 @@ fn uppercase_first_char(s: &str) -> String {
     out
 }
 
+fn is_immunized(token: &crate::types::Token) -> bool {
+    token.chunks().iter().any(|c| c == "_immunized")
+}
+
+fn is_spelling_ignored_token(token: &crate::types::Token) -> bool {
+    token
+        .chunks()
+        .iter()
+        .any(|c| c == "_ignore_spelling" || c == "_immunized")
+}
+
 /// Port of `UppercaseSentenceStartRule.match` for a single sentence with the
 /// text-level state of the previous sentence.
 pub(crate) fn uppercase_sentence_start(
@@ -209,11 +220,29 @@ pub(crate) fn uppercase_sentence_start(
         }
     }
 
+    // the last significant token of this sentence (trailing whitespace or
+    // quote ignored)
+    let mut last_token = tokens[tokens.len() - 1].word().as_str().to_string();
+    if is_whitespace_or_quote(&last_token) && tokens.len() >= 2 {
+        last_token = tokens[tokens.len() - 2].word().as_str().to_string();
+    }
+
     let mut prevent_error = false;
     if ctx.prev_last_token.as_deref() == Some(",") || ctx.prev_last_token.as_deref() == Some(";") {
         prevent_error = true;
     }
     if contains_digit(check_token) {
+        prevent_error = true;
+    }
+    // Java's SENTENCE_END1 = "[.?!…]|": matches only the empty string or a
+    // single end punctuation. If the previous sentence ended with a real
+    // word, this sentence must end with ./?/!/… for the error to count.
+    let prev_is_empty_or_punct = match ctx.prev_last_token.as_deref() {
+        None => true,
+        Some("") => true,
+        Some(t) => t.chars().count() == 1 && matches!(t, "." | "?" | "!" | "…"),
+    };
+    if !prev_is_empty_or_punct && !matches!(last_token.as_str(), "." | "?" | "!" | "…") {
         prevent_error = true;
     }
     // allow lowercase enumerations like "a)" and "iv."
@@ -223,7 +252,11 @@ pub(crate) fn uppercase_sentence_start(
             prevent_error = true;
         }
     }
-    if ctx.prev_numbered_list || is_url(check_token) || is_email(check_token) {
+    if ctx.prev_numbered_list
+        || is_url(check_token)
+        || is_email(check_token)
+        || is_immunized(tokens[0])
+    {
         prevent_error = true;
     }
 
@@ -323,12 +356,9 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
             ignore: &[],
             prohibit: &[],
         },
-        "de" => SpellingRuleConfig {
-            id: "MORFOLOGIK_RULE_DE_DE",
-            latin_script: true,
-            ignore: spelling_lists!("de", "ignore.txt", "spelling.txt", "spelling_custom.txt"),
-            prohibit: spelling_lists!("de", "prohibit.txt", "prohibit_custom.txt"),
-        },
+        // de disabled: GermanSpellerRule decomposes compounds before looking
+        // them up; without that port every non-listed compound would over-fire
+        // "de" => SpellingRuleConfig { id: "MORFOLOGIK_RULE_DE_DE", ... },
         "en" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_EN_US",
             latin_script: true,
@@ -417,12 +447,32 @@ pub(crate) fn morfologik_spelling(
     let tokens: Vec<_> = sentence.iter().collect();
     let mut out = Vec::new();
 
+    // es/ca/fr/pt call setIgnoreTaggedWords(): words the tagger knows are
+    // never spelling errors
+    let ignore_tagged = matches!(lang, "es" | "ca" | "fr" | "pt");
+
     for (idx, token) in tokens.iter().enumerate() {
         let word = token.word().as_str();
         if word.is_empty()
             || is_url(word)
             || is_email(word)
+            || is_spelling_ignored_token(token)
             || spelling_ignored(word, &config)
+            // fragments of hyphenated splits and single characters (our
+            // tokenizer splits where LT's does not)
+            || word.chars().count() < 2
+            || word.starts_with('-')
+            || word.ends_with('-')
+        {
+            continue;
+        }
+        // a reading with a real part-of-speech (not the empty pseudo-reading
+        // and not UNKNOWN) makes the word "tagged"
+        if ignore_tagged
+            && token.word().tags().iter().any(|t| {
+                let pos = t.pos().as_str();
+                !pos.is_empty() && pos != "UNKNOWN"
+            })
         {
             continue;
         }

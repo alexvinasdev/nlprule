@@ -50,6 +50,88 @@ pub struct Rules {
     pub(crate) synth: Option<std::sync::Arc<crate::rule::synthesizer::Synthesizer>>,
 }
 
+
+/// Port of `CleanOverlappingFilter.filter` (LT 6.5). Priorities are all
+/// treated as equal (no language overrides priority in the languages we
+/// build; the `picky` tag only matters at picky level).
+fn clean_overlapping(suggestions: Vec<Suggestion>) -> Vec<Suggestion> {
+    let mut clean = Vec::new();
+    let mut iter = suggestions.into_iter();
+    let mut prev = match iter.next() {
+        Some(first) => first,
+        None => return clean,
+    };
+    let (mut prev_from, mut prev_to) =
+        (prev.span().char().start, prev.span().char().end);
+
+    for rule_match in iter {
+        let (cur_from, cur_to) = (
+            rule_match.span().char().start,
+            rule_match.span().char().end,
+        );
+        if cur_from < prev_from {
+            // cannot happen (the list is sorted); treat as non-overlapping
+            clean.push(prev);
+            prev = rule_match;
+            let span = prev.span().char().clone();
+            prev_from = span.start;
+            prev_to = span.end;
+            continue;
+        }
+
+        let mut is_duplicate_suggestion = false;
+        if let (Some(suggestion), Some(prev_suggestion)) = (
+            rule_match.replacements().first(),
+            prev.replacements().first(),
+        ) {
+            let (pf, pt) = (prev_from, prev_to); let _ = pf;
+            if !suggestion.is_empty() && !prev_suggestion.is_empty() {
+                // juxtaposed errors adding a comma in the same place
+                if cur_from == pt && prev_suggestion.ends_with(',') && suggestion.starts_with(", ") {
+                    is_duplicate_suggestion = true;
+                }
+                // duplicate suggestion for the same position
+                if suggestion.contains(' ')
+                    && prev_suggestion.contains(' ')
+                    && cur_from == pt + 1
+                {
+                    let parts: Vec<&str> = suggestion.split(' ').collect();
+                    let parts_prev: Vec<&str> = prev_suggestion.split(' ').collect();
+                    if parts_prev.len() > 1
+                        && parts.len() > 1
+                        && parts_prev[1] == parts[0]
+                    {
+                        is_duplicate_suggestion = true;
+                    }
+                }
+            }
+        }
+
+        // no overlap (juxtaposed errors are kept)
+        if cur_from >= prev_to && !is_duplicate_suggestion {
+            clean.push(prev);
+            prev = rule_match;
+            let span = prev.span().char().clone();
+            prev_from = span.start;
+            prev_to = span.end;
+            continue;
+        }
+
+        // overlapping: equal priorities -> the longer match wins, then the
+        // later match wins
+        let cur_priority = cur_to - cur_from;
+        let prev_priority = prev_to - prev_from;
+        if cur_priority >= prev_priority {
+            prev = rule_match;
+            let span = prev.span().char().clone();
+            prev_from = span.start;
+            prev_to = span.end;
+        }
+    }
+    clean.push(prev);
+    clean
+}
+
 impl Rules {
     /// Creates a new rule set from a path to a binary.
     ///
@@ -127,15 +209,19 @@ impl Rules {
         sentence: &Sentence,
         ctx: &crate::builtins::TextRuleContext,
     ) -> Vec<Suggestion> {
-        let mut out = crate::builtins::uppercase_sentence_start(
-            sentence,
-            self.builtin_lang.as_deref(),
-            ctx,
-        );
-        out.extend(crate::builtins::morfologik_spelling(
+        // the speller before the casing rule: at equal spans the later match
+        // wins in clean_overlapping, so the casing rule replaces the speller
+        // only when it is longer, and a pattern rule replaces both - as on
+        // the LT server
+        let mut out = crate::builtins::morfologik_spelling(
             sentence,
             self.builtin_lang.as_deref(),
             self.filter_data.speller.as_ref(),
+        );
+        out.extend(crate::builtins::uppercase_sentence_start(
+            sentence,
+            self.builtin_lang.as_deref(),
+            ctx,
         ));
         let tokens: Vec<_> = sentence.iter().collect();
         if tokens.len() < 2 {
@@ -245,21 +331,25 @@ impl Rules {
                 .then_with(|| ib.cmp(ia))
         });
 
-        let mut mask = vec![false; sentence.text().chars().count()];
-
-        output
+        // Port of LT's CleanOverlappingFilter (the HTTP server always runs
+        // with it): walk the position-sorted matches, drop overlapping ones -
+        // ties resolved by longer match, then by the later match - and the
+        // juxtaposed comma duplicate-suggestion cases. The list is already
+        // sorted by start; at equal starts the built-ins (appended last,
+        // sorted first) come first, so a pattern or speller match at the same
+        // span replaces them, like on the server.
+        let suggestions: Vec<_> = output
             .into_iter()
-            .filter_map(|(_, suggestion)| {
-                let span = suggestion.span().clone().lshift(sentence.span().start());
-
-                if mask[span.char().clone()].iter().all(|x| !x) {
-                    mask[span.char().clone()].iter_mut().for_each(|x| *x = true);
-                    Some(suggestion)
-                } else {
-                    None
-                }
+            .map(|(_, suggestion)| {
+                suggestion
+                    .span()
+                    .clone()
+                    .lshift(sentence.span().start());
+                suggestion
             })
-            .collect()
+            .collect();
+
+        clean_overlapping(suggestions)
     }
 
     /// Compute the suggestions for a text by checking all rules.

@@ -1394,8 +1394,8 @@ impl DisambiguationRule {
                 }
                 Ok(Disambiguation::AddChunk(tags))
             }
-            Some("ignore_spelling") => Ok(Disambiguation::Nop), // ignore_spelling can be ignored since we dont check spelling
-            Some("immunize") => Ok(Disambiguation::Nop), // immunize can probably not be ignored
+            Some("ignore_spelling") => Ok(Disambiguation::IgnoreSpelling),
+            Some("immunize") => Ok(Disambiguation::Immunize),
             Some("filterall") => {
                 let mut disambig = Vec::new();
                 let mut marker_disambig = Vec::new();
