@@ -6741,15 +6741,15 @@ fn portar_temps_suggestions(ctx: &mut FilterCtx, _replacements: Vec<String>) -> 
 
 /// Arabic POS tags encode morphological flags at fixed character positions,
 /// e.g. `VW1;M3H-faU;WS-`. Mirrors `ArabicTagManager`.
-fn ar_is_noun(postag: &str) -> bool {
+pub(crate) fn ar_is_noun(postag: &str) -> bool {
     postag.starts_with('N')
 }
 
-fn ar_is_verb(postag: &str) -> bool {
+pub(crate) fn ar_is_verb(postag: &str) -> bool {
     postag.starts_with('V')
 }
 
-fn ar_is_stopword(postag: &str) -> bool {
+pub(crate) fn ar_is_stopword(postag: &str) -> bool {
     postag.starts_with('P')
 }
 
@@ -6808,14 +6808,14 @@ fn ar_flag_pos(postag: &str, flag_type: &str) -> Option<usize> {
     Some(pos)
 }
 
-fn ar_get_flag(postag: &str, flag_type: &str) -> char {
+pub(crate) fn ar_get_flag(postag: &str, flag_type: &str) -> char {
     match ar_flag_pos(postag, flag_type) {
         Some(pos) => postag.chars().nth(pos).unwrap_or('-'),
         None => '-',
     }
 }
 
-fn ar_set_flag(postag: &str, flag_type: &str, flag: char) -> String {
+pub(crate) fn ar_set_flag(postag: &str, flag_type: &str, flag: char) -> String {
     if let Some(pos) = ar_flag_pos(postag, flag_type) {
         let mut chars: Vec<char> = postag.chars().collect();
         if pos < chars.len() {
@@ -6830,7 +6830,7 @@ fn ar_is_definite(postag: &str) -> bool {
     ar_is_noun(postag) && ar_get_flag(postag, "PRONOUN") == 'L'
 }
 
-fn ar_is_majrour(postag: &str) -> bool {
+pub(crate) fn ar_is_majrour(postag: &str) -> bool {
     let flag = ar_get_flag(postag, "CASE");
     flag == 'I' || flag == '-'
 }
@@ -6843,7 +6843,7 @@ fn ar_is_attached(postag: &str) -> bool {
     (ar_is_noun(postag) || ar_is_verb(postag)) && ar_get_flag(postag, "PRONOUN") == 'H'
 }
 
-fn ar_is_unattached_noun(postag: &str) -> bool {
+pub(crate) fn ar_is_unattached_noun(postag: &str) -> bool {
     ar_is_noun(postag) && ar_get_flag(postag, "PRONOUN") != 'H' && !postag.ends_with('X')
 }
 

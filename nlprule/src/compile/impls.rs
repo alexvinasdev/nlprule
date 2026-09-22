@@ -140,8 +140,30 @@ impl Tagger {
         word_store.insert(0, "");
 
         // tag store ids should be consistent across runs
-        let mut tag_store: Vec<_> = tag_store.into_iter().collect();
+        let mut tag_store: Vec<String> = tag_store
+            .into_iter()
+            .map(|t| t.to_string())
+            .collect();
         tag_store.sort_unstable();
+
+        // Arabic stemming: the merged postags produced at runtime by
+        // `ar_stem::additional_tags` need ids in the tag store - add the
+        // closure of the flag operations to the dictionary tags
+        if lang_options.arabic_stemming {
+            let base: Vec<String> = tag_store
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
+            let expanded = crate::tokenizer::ar_stem::expand_tag_closure(base, 4);
+            log::info!(
+                "Arabic stemming: tag store expanded from {} to {} tags",
+                tag_store.len(),
+                expanded.len()
+            );
+            tag_store = expanded;
+            tag_store.sort_unstable();
+            tag_store.dedup();
+        }
 
         // add special part of speech tags, they must have ids starting from zero.
         // remove them first: if e.g. "UNKNOWN" is already a regular tag, naively
@@ -150,7 +172,7 @@ impl Tagger {
         let specials: Vec<_> = SpecialPos::iter().collect::<Vec<_>>();
         tag_store.retain(|tag| !specials.iter().any(|s| s == tag));
         for (i, special_pos) in SpecialPos::iter().enumerate() {
-            tag_store.insert(i, special_pos);
+            tag_store.insert(i, special_pos.to_string());
         }
 
         let word_store: BiMap<_, _> = word_store

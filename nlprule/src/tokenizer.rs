@@ -20,6 +20,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod ar_stem;
 pub mod chunk;
 pub mod cjk;
 pub mod multiword;
@@ -366,6 +367,41 @@ impl Tokenizer {
 
                 if self.cjk.is_some() && cjk::needs_segmentation(token_text) {
                     tags.extend(cjk::word_data(token_text, self.cjk.unwrap(), &self.tagger));
+                }
+
+                // Arabic prefix/suffix stemming (LT ArabicTagger.additionalTags):
+                // derive readings of e.g. "السلامة" from the dictionary entry
+                // "سلامة" with merged procletic flags
+                if self.tagger.lang_options().arabic_stemming {
+                    let base: Vec<_> = tags
+                        .iter()
+                        .map(|t| {
+                            (
+                                t.lemma().as_str().to_string(),
+                                t.pos().as_str().to_string(),
+                            )
+                        })
+                        .collect();
+                    if !ar_stem::is_stopword_reading(&base) {
+                        let tagger = &self.tagger;
+                        let additional = ar_stem::additional_tags(token_text, |stem| {
+                            tagger
+                                .get_tags(stem)
+                                .map(|d| {
+                                    (
+                                        d.lemma().as_str().to_string(),
+                                        d.pos().as_str().to_string(),
+                                    )
+                                })
+                                .collect()
+                        });
+                        for (lemma, pos) in additional {
+                            tags.push(WordData::new(
+                                tagger.id_word(lemma.into()),
+                                tagger.id_tag_stored(&pos),
+                            ));
+                        }
+                    }
                 }
 
                 IncompleteToken::new(
