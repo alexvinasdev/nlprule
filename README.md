@@ -166,9 +166,9 @@ tagger dictionaries in the LT distribution itself.
 | el             | 98         | 95        | sl     | 85         | 82        |
 | en | 5715 | 4865 | sr     | 45         | 44        |
 | eo | 416 | 127       | sv     | 31         | 29        |
-| es | 1806 | 1413 | ta     | 210        | 210       |
+| es | 1806 | 1415 | ta     | 210        | 210       |
 | fa             | 764        | 557       | tl     | 44         | 37        |
-| fr | 5313 | 3380 | uk | 10915 | 10682     |
+| fr | 5313 | 3390 | uk | 10915 | 10682     |
 | ga             | 3566       | 3292      | zh     | 1863       | 1520      |
 | gl | 298 | 204       | it | 131 | 124       |
 | ja             | 735        | 702       |        |            |           |
@@ -198,7 +198,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | pt   | 1000      | 71        | 84     | 0.89               | 0.87           | 0.91    |
 | ru   | 1000      | 111        | 93     | 0.87               | 0.89           | 0.88    |
 | en   | 1000      | 101        | 106     | 0.85               | 0.84           | 0.88    |
-| fr   | 1000      | 93        | 131     | 0.84               | 0.79           | 0.86    |
+| fr   | 1000      | 71        | 78     | 0.88               | 0.88           | 0.91    |
 | ar   | 616       | 50           | 62      | 0.87               | 0.84           | 0.89    |
 | ca   | 1000      | 212        | 199     | 0.65               | 0.67           | 0.78    |
 
@@ -227,9 +227,10 @@ into:
   `ANALISI_FEM`, `MUNICIPIS_VALENCIA` (external toponym data) and
   `PRONOMS_FEBLES_SOLTS1` firing at different offsets — tagger/disambiguator
   reading differences, not missing rules.
-- `fr` (0.82/0.77): `D_N`/`D_N_E_OU_E` determiner-noun agreement — the
-  French tagger assigns different readings, so the patterns don't fire on
-  our tags.
+- `fr` (0.88/0.88): the `D_N` determiner-noun agreement family now fires
+  (the antipattern-unification bug is fixed); the residue is tagger
+  reading differences and the rules still dropped for parallel-token
+  control flow.
 - `en` (0.85/0.85): the OpenNLP chunker (2k `chunk=` references) plus
   speller-backed rules (`EN_CONTRACTION_SPELLING`,
   `EN_SPLIT_WORDS_HYPHEN`); a residue of `UPPERCASE_SENTENCE_START` from
