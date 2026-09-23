@@ -154,21 +154,21 @@ tagger dictionaries in the LT distribution itself.
 
 | lang           | runnable   | passing   | lang   | runnable   | passing   |
 |----------------|------------|-----------|--------|------------|-----------|
-| ar             | 965        | 822       | km     | 44         | 11        |
+| ar | 1110 | 1062 | km     | 44         | 11        |
 | ast            | 71         | 69        | lt     | 4          | 4         |
 | be             | 516        | 506       | ml     | 18         | 18        |
 | br | 665 | 476       | nl†    | 68331      | 68208     |
-| ca | 14162 | 10663     | pl | 1842 | 1491      |
-| crh            | 93         | 17        | pt | 1969 | 953       |
+| ca | 14284 | 10717 | pl | 1842 | 1491      |
+| crh            | 93         | 17        | pt | 1971 | 955 |
 | da             | 78         | 61        | ro     | 1167       | 1116      |
-| de | 5477 | 5190      | ru | 1169 | 983       |
+| de | 5478 | 5191 | ru | 1169 | 983       |
 | de-DE-x-simple | 92         | 40        | sk     | 206        | 184       |
 | el             | 98         | 95        | sl     | 85         | 82        |
-| en | 5703 | 4858      | sr     | 45         | 44        |
+| en | 5713 | 4864 | sr     | 45         | 44        |
 | eo | 416 | 127       | sv     | 31         | 29        |
 | es | 1797 | 1404      | ta     | 210        | 210       |
 | fa             | 764        | 557       | tl     | 44         | 37        |
-| fr | 4951 | 3137      | uk | 10915 | 10682     |
+| fr | 5016 | 3195 | uk | 10915 | 10682     |
 | ga             | 3566       | 3292      | zh     | 1863       | 1520      |
 | gl | 298 | 204       | it | 131 | 124       |
 | ja             | 735        | 702       |        |            |           |
@@ -192,15 +192,15 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 
 | lang | sentences | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
 |------|-----------|--------------|---------|--------------------|----------------|---------|
-| de   | 1000      | 11           | 16      | 0.97               | 0.96           | 0.98    |
-| uk   | 1000      | 38           | 29      | 0.95               | 0.96           | 0.96    |
-| es   | 1000      | 57           | 71      | 0.92               | 0.90           | 0.93    |
-| pt   | 1000      | 71           | 86      | 0.89               | 0.87           | 0.90    |
-| ru   | 1000      | 111          | 93      | 0.87               | 0.89           | 0.88    |
-| en   | 1000      | 100          | 104     | 0.85               | 0.85           | 0.88    |
-| fr   | 1000      | 104          | 141     | 0.82               | 0.77           | 0.85    |
-| ar   | 616       | 38           | 234     | 0.80               | 0.40           | 0.62    |
-| ca   | 1000      | 225          | 214     | 0.63               | 0.64           | 0.76    |
+| de   | 1000      | 11        | 16     | 0.97               | 0.96           | 0.98    |
+| uk   | 1000      | 38        | 29     | 0.95               | 0.96           | 0.96    |
+| es   | 1000      | 57        | 71     | 0.92               | 0.90           | 0.93    |
+| pt   | 1000      | 71        | 84     | 0.89               | 0.87           | 0.91    |
+| ru   | 1000      | 111        | 93     | 0.87               | 0.89           | 0.88    |
+| en   | 1000      | 98        | 103     | 0.86               | 0.85           | 0.88    |
+| fr   | 1000      | 104        | 141     | 0.82               | 0.77           | 0.85    |
+| ar   | 616       | 50           | 62      | 0.87               | 0.84           | 0.89    |
+| ca   | 1000      | 212        | 199     | 0.65               | 0.67           | 0.78    |
 
 This includes the Java-only built-in rules that have no XML representation,
 ported to Rust (see "ported" below): `UPPERCASE_SENTENCE_START` (with the
@@ -217,10 +217,12 @@ longer match wins, then the later match).
 nlprule does not (400 sentences per language); the remaining gap decomposes
 into:
 
-- `ar` (recall 0.40): the `gender_*` agreement rules compile but don't fire
-  on our Arabic tag readings, plus `HUNSPELL_RULE_AR` (hunspell `ar.dic`
-  needs affix expansion), `ArabicNumberPhraseFilter` (needs
-  ArabicNumbersWords) and the Arabic chunker-less tagger differences.
+- `ar` (0.87/0.84): `ArabicTagger.additionalTags` prefix/suffix stemming is
+  ported (definite article, clitics; +145 rules recovered, 1062 examples
+  pass), `HUNSPELL_RULE_AR` runs on the offline-expanded hunspell dictionary
+  (30.5M forms, validated 400/400 against the server's accept/reject). The
+  residue is gender subrule-variant selection and `ArabicNumberPhraseFilter`
+  (needs the ArabicNumbersWords number-to-words engine).
 - `ca` (0.63/0.64): both directions of `CONCORDANCES_DET_NOM`,
   `ANALISI_FEM`, `MUNICIPIS_VALENCIA` (external toponym data) and
   `PRONOMS_FEBLES_SOLTS1` firing at different offsets — tagger/disambiguator
