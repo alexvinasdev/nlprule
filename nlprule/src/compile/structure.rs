@@ -265,7 +265,9 @@ pub enum SuggestionPart {
 #[serde(deny_unknown_fields)]
 pub struct Suggestion {
     pub suppress_misspelled: Option<String>,
-    #[serde(rename = "$value")]
+    /// `<suggestion></suggestion>` (no text) is valid - it suppresses any
+    /// replacement
+    #[serde(rename = "$value", default)]
     pub parts: Vec<SuggestionPart>,
 }
 
@@ -748,7 +750,14 @@ pub fn read_rules<P: AsRef<std::path::Path>>(
                         vec![]
                     }
                 },
-                Err(err) => vec![Err(err)],
+                Err(err) => {
+                    log::warn!(
+                        "rule chunk failed to deserialize: {} | chunk: {}",
+                        err,
+                        &xml.chars().take(300).collect::<String>()
+                    );
+                    vec![Err(err)]
+                }
             });
             out
         })
