@@ -252,6 +252,10 @@ pub struct Match {
     /// Element content used as a static lemma, e.g. `<match no="1" postag="VBN">word</match>`.
     #[serde(rename = "$value")]
     pub content: Option<XmlString>,
+    /// `setpos="yes"`: take over the POS of the matched token (LT 6.5);
+    /// parsed, the default postag handling is a close approximation
+    #[serde(default, rename = "setpos")]
+    pub setpos: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -530,6 +534,13 @@ pub struct Rule {
     pub premium: Option<String>,
     /// LT 6.x tone tags; accepted but unused.
     pub tone_tags: Option<String>,
+    /// LT 6.5 attributes parsed but not differentiated
+    #[serde(default, rename = "min_prev_matches")]
+    pub min_prev_matches: Option<String>,
+    #[serde(default, rename = "distance_tokens")]
+    pub distance_tokens: Option<String>,
+    #[serde(default, rename = "is_goal_specific")]
+    pub is_goal_specific: Option<String>,
     #[serde(rename = "__unused_unifications")]
     pub unifications: Option<Vec<Unification>>,
 }
@@ -549,6 +560,10 @@ pub struct RuleGroup {
     pub tags: Option<String>,
     pub short: Option<XmlText>,
     pub url: Option<XmlText>,
+    #[serde(default)]
+    pub tone_tags: Option<String>,
+    #[serde(default, rename = "min_prev_matches")]
+    pub min_prev_matches: Option<String>,
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
 }

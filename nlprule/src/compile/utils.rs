@@ -338,6 +338,15 @@ mod regex {
             }
         }
         regex = regex.replace("(?-)", "");
+        // duplicate inline flags, e.g. `(?ii)` (Java tolerates, regex-syntax
+        // does not)
+        loop {
+            let reduced = regex.replace("(?ii)", "(?i)");
+            if reduced == regex {
+                break;
+            }
+            regex = reduced;
+        }
         let mut prev_error_start = None;
 
         let mut ast = loop {
