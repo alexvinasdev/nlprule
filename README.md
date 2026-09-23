@@ -158,13 +158,13 @@ tagger dictionaries in the LT distribution itself.
 | ast            | 71         | 69        | lt     | 4          | 4         |
 | be             | 516        | 506       | ml     | 18         | 18        |
 | br | 665 | 476       | nl†    | 68331      | 68208     |
-| ca | 14513 | 10855 | pl | 1842 | 1491      |
+| ca | 14545 | 10877 | pl | 1842 | 1491      |
 | crh            | 93         | 17        | pt | 1978 | 956 |
 | da             | 78         | 61        | ro     | 1167       | 1116      |
 | de | 5480 | 5193 | ru | 1174 | 986 |
 | de-DE-x-simple | 92         | 40        | sk     | 206        | 184       |
 | el             | 98         | 95        | sl     | 85         | 82        |
-| en | 5715 | 4865 | sr     | 45         | 44        |
+| en | 5718 | 4867 | sr     | 45         | 44        |
 | eo | 416 | 127       | sv     | 31         | 29        |
 | es | 1806 | 1415 | ta     | 210        | 210       |
 | fa             | 764        | 557       | tl     | 44         | 37        |
@@ -200,7 +200,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | en   | 1000      | 101        | 106     | 0.85               | 0.84           | 0.88    |
 | fr   | 1000      | 71        | 78     | 0.88               | 0.88           | 0.91    |
 | ar   | 616       | 50           | 62      | 0.87               | 0.84           | 0.89    |
-| ca   | 1000      | 212        | 199     | 0.65               | 0.67           | 0.78    |
+| ca   | 1000      | 165        | 154     | 0.73               | 0.74           | 0.82    |
 
 This includes the Java-only built-in rules that have no XML representation,
 ported to Rust (see "ported" below): `UPPERCASE_SENTENCE_START` (with the
@@ -223,10 +223,12 @@ into:
   (30.5M forms, validated 400/400 against the server's accept/reject). The
   residue is gender subrule-variant selection and `ArabicNumberPhraseFilter`
   (needs the ArabicNumbersWords number-to-words engine).
-- `ca` (0.63/0.64): both directions of `CONCORDANCES_DET_NOM`,
-  `ANALISI_FEM`, `MUNICIPIS_VALENCIA` (external toponym data) and
-  `PRONOMS_FEBLES_SOLTS1` firing at different offsets — tagger/disambiguator
-  reading differences, not missing rules.
+- `ca` (0.73/0.74): ANALISI_FEM/VESSANT fixed (ConvertToGenderAndNumberFilter
+  now walks the whole sentence with Java's insert order) and sentence-initial
+  DET+NOUN agreement fires (filters receive LT's contiguous pattern-token
+  range incl SENT_START). Residue: `PRONOMS_FEBLES_SOLTS1` over-firing on
+  article/pronoun ambiguities, `MUNICIPIS_VALENCIA` (external toponym data),
+  and ~40 rules still dropped for parallel-token control flow.
 - `fr` (0.88/0.88): the `D_N` determiner-noun agreement family now fires
   (the antipattern-unification bug is fixed); the residue is tagger
   reading differences and the rules still dropped for parallel-token
