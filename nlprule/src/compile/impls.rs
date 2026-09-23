@@ -475,6 +475,11 @@ impl Rules {
                         |x| x.clone(),
                     );
 
+                    let rid_for_errors = rule_structure
+                        .id
+                        .clone()
+                        .or_else(|| group.as_ref().map(|g| g.id.clone()))
+                        .unwrap_or_default();
                     match Rule::from_rule_structure(rule_structure, build_info) {
                         Ok(mut rule) => {
                             if (options.ids.is_empty()
@@ -492,7 +497,7 @@ impl Rules {
                             }
                         }
                         Err(x) => {
-                            *errors.entry(format!("[Rule] {}", x)).or_insert(0) += 1;
+                            *errors.entry(format!("[Rule:{}] {}", rid_for_errors, x)).or_insert(0) += 1;
                             None
                         }
                     }

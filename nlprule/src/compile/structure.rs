@@ -482,6 +482,10 @@ pub enum PatternPart {
 #[serde(deny_unknown_fields)]
 pub struct Pattern {
     pub case_sensitive: Option<String>,
+    /// `raw_pos="yes"`: unify on the raw postag (LT 6.5); parsed, the unify
+    /// engine treats features equivalently
+    #[serde(default, rename = "raw_pos")]
+    pub raw_pos: Option<String>,
     #[serde(rename = "$value")]
     pub parts: Vec<PatternPart>,
 }
@@ -492,6 +496,9 @@ pub struct Regex {
     pub text: XmlString,
     pub case_sensitive: Option<String>,
     pub mark: Option<String>,
+    /// e.g. `type="exact"` (LT 6.5); parsed, semantics not differentiated
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -754,7 +761,7 @@ pub fn read_rules<P: AsRef<std::path::Path>>(
                     log::warn!(
                         "rule chunk failed to deserialize: {} | chunk: {}",
                         err,
-                        &xml.chars().take(300).collect::<String>()
+                        &xml.chars().take(2500).collect::<String>()
                     );
                     vec![Err(err)]
                 }
@@ -834,4 +841,54 @@ pub fn read_disambiguation_rules<P: AsRef<std::path::Path>>(
             Err(x) => Err(x),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod regex_deser_tests {
+    use super::*;
+
+    #[test]
+    fn regexp_element_with_text_child() {
+        let xml = r#"<regexp mark="1" type="exact"><text text="abc"/></regexp>"#;
+        let mut de = serde_xml_rs::Deserializer::new_from_reader(xml.as_bytes());
+        let r = Regex::deserialize(&mut de);
+        assert!(r.is_ok(), "failed: {:?}", r.err());
+        assert_eq!(r.unwrap().text.to_string(), "abc");
+    }
+
+    #[test]
+    fn rule_with_regexp_only() {
+        let xml = r#"<rule id="DOUBLES_ESPACES" name="Deux espaces">
+            <regexp mark="1" type="exact"><text text="abc"/></regexp>
+            <message><text text="msg"/></message>
+            <example type="incorrect"><marker><text text="a  b"/></marker></example>
+        </rule>"#;
+        let mut de = serde_xml_rs::Deserializer::new_from_reader(xml.as_bytes());
+        let r = Rule::deserialize(&mut de);
+        assert!(r.is_ok(), "failed: {:?}", r.err().map(|e| e.to_string()));
+    }
+}
+
+#[cfg(test)]
+mod read_rules_tests {
+    use super::read_rules;
+
+    #[test]
+    fn nom_agreement_group_subrules() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data2/fr/grammar.xml");
+        if !path.exists() {
+            return; // data dir not present in some environments
+        }
+        let rules = read_rules(path);
+        let n = rules
+            .iter()
+            .filter_map(|r| r.as_ref().ok())
+            .filter(|(_, group, _)| {
+                group.as_ref().map_or(false, |g| g.id == "NOM_AGREEMENT")
+            })
+            .count();
+        eprintln!("NOM_AGREEMENT subrules parsed: {}", n);
+        assert!(n >= 5, "expected 5 subrules, got {}", n);
+    }
 }

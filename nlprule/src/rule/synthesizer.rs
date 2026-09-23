@@ -93,8 +93,10 @@ impl Synthesizer {
         let mut results = Vec::new();
 
         let key = format!("{}|{}", lemma, pos);
-        if let Some(value) = self.map().get(&key) {
-            results = self.value_forms(value);
+        if !self.map_bytes.is_empty() {
+            if let Some(value) = self.map().get(&key) {
+                results = self.value_forms(value);
+            }
         }
 
         if let Some(manual_forms) = self.manual.get(&(lemma.to_string(), pos.to_string())) {

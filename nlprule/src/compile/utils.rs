@@ -314,7 +314,30 @@ mod regex {
         case_sensitive: bool,
         full_match: bool,
     ) -> Result<String, Error> {
+        // pre-normalize Java-only syntax that the regex-syntax AST parser
+        // rejects outright:
+        // - possessive quantifiers (X*+ X++ X?+ X{n,m}+) -> greedy
+        // - a dangling `(?-)` (no flags negated) -> removed
         let mut regex = in_regex.to_owned();
+        // repeatedly de-possessivize the leftmost possessive quantifier
+        loop {
+            let mut possessive: Option<(usize, usize)> = None;
+            for pat in ["*+", "++", "?+"] {
+                if let Some(pos) = regex.find(pat) {
+                    if possessive.map_or(true, |(p, _)| pos < p) {
+                        possessive = Some((pos, pat.len()));
+                    }
+                }
+            }
+            match possessive {
+                Some((pos, len)) => {
+                    let quant = regex[pos..pos + len].chars().next().unwrap();
+                    regex.replace_range(pos..pos + len, &quant.to_string());
+                }
+                None => break,
+            }
+        }
+        regex = regex.replace("(?-)", "");
         let mut prev_error_start = None;
 
         let mut ast = loop {
@@ -414,5 +437,20 @@ mod regex {
         fn nested_quantifiers() {
             assert!(from_java_regex(r"[0-9,.]*{1,}", false, false).is_err())
         }
+    }
+}
+
+#[cfg(test)]
+mod fr_regex_tests {
+    use super::*;
+
+    #[test]
+    fn fr_det_postag_regex() {
+        let re = from_java_regex(r"(P\+)?D .*", true, true).unwrap();
+        let compiled = crate::utils::regex::Regex::new(re.clone()).try_compile();
+        assert!(compiled.is_ok(), "compile failed for {}", re);
+        let r = crate::utils::regex::Regex::new(re);
+        assert!(r.is_match("D f s"), "no match on D f s: {}", r.as_str());
+        assert!(r.is_match("P+D f s"));
     }
 }
