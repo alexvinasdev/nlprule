@@ -387,17 +387,40 @@ impl<'a, 't> Iterator for Suggestions<'a, 't> {
                 // indices of the sentence tokens covered by the WHOLE pattern
                 // (LT filter `\N` backreferences refer to all matched elements,
                 // not just the marker range)
-                let matched_tokens: Vec<usize> = graph
+                // LT passes `Arrays.copyOfRange(sentenceTokens, first, last + 1)`
+                // to its filters: the CONTIGUOUS sentence-token range of the
+                // match, which includes the SENT_START token (zero char span)
+                // when a leading wildcard consumed it, and any skipped tokens
+                // between matched elements
+                let gstart = graph
                     .groups()
-                    .iter()
-                    .flat_map(|group| {
-                        let tokens: Vec<_> = group.tokens(sentence).collect();
-                        tokens
-                    })
-                    .filter_map(|token| {
-                        sentence.iter().position(|x| std::ptr::eq(x, token))
+                    .first()
+                    .map(|g| g.span.char().start)
+                    .unwrap_or(0);
+                let gend = graph
+                    .groups()
+                    .last()
+                    .map(|g| g.span.char().end)
+                    .unwrap_or(0);
+                // groups[0] is always an empty artifact group; the first
+                // pattern element consumed the SENT_START token exactly when
+                // the group AFTER the artifact is zero-length at position 0
+                // (SENT_START is the only zero-char-span token)
+                let starts_at_sent_start = graph
+                    .groups()
+                    .get(1)
+                    .map(|g| g.span.char().start == 0 && g.span.char().end == 0)
+                    .unwrap_or(false);
+                let matched_tokens: Vec<usize> = (0..sentence.len())
+                    .filter(|&i| {
+                        let span = sentence.index(i).span().char();
+                        let real_token = span.end > span.start;
+                        span.start >= gstart
+                            && span.end <= gend
+                            && (real_token || (starts_at_sent_start && span.start == 0))
                     })
                     .collect::<Vec<usize>>();
+
                 let mut seen = std::collections::HashSet::new();
                 let matched_tokens: Vec<usize> = matched_tokens
                     .into_iter()
