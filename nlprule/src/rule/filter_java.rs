@@ -4158,7 +4158,10 @@ fn convert_to_gender_and_number(ctx: &mut FilterCtx, replacements: Vec<String>) 
     let lemma_select = ctx.arg("lemmaSelect")?;
     let keep_original = ctx.arg("keepOriginal").as_deref() == Some("true");
 
-    let tokens = ctx.matched_token_refs();
+    // the Java filter walks the WHOLE sentence (getTokensWithoutWhitespace,
+    // SENT_START included) to pick up determiners/prepositions/adjectives
+    // around the match - not just the matched tokens
+    let tokens = ctx.sentence_tokens();
     // first token at/after the match start
     let mut pos_word = 0;
     while pos_word < tokens.len()
@@ -4305,14 +4308,10 @@ fn convert_to_gender_and_number(ctx: &mut FilterCtx, replacements: Vec<String>) 
                         if s == "bo" {
                             s = "bon".to_string();
                         }
-                        let prefix = format!("{}{}", conditional, {
-                            if tokens[i + 1].has_space_before() {
-                                " "
-                            } else {
-                                ""
-                            }
-                        });
-                        builder = format!("{}{}{}", prefix, s, builder);
+                        // Java: insert(0, conditional); insert(0, " ");
+                        // insert(0, s) -> s + space + conditional + rest
+                        let space = if tokens[i + 1].has_space_before() { " " } else { "" };
+                        builder = format!("{}{}{}{}", s, space, conditional, builder);
                         conditional.clear();
                         start_pos = i;
                         if atr.2.starts_with('D') && !atr.2.starts_with("DN") {
