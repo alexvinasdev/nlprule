@@ -30,13 +30,17 @@ impl TokenEngine {
             for i in 0..sentence.len() {
                 for antipattern in &self.antipatterns {
                     if let Some(anti_graph) = antipattern.composition.apply(sentence, i) {
-                        if let Some(unification) = &antipattern.unification {
-                            // the composition returns only one alignment; if its
-                            // unification fails, other alignments might still
-                            // satisfy it. Blocking on the plain match mirrors
-                            // LT's behavior closely enough and avoids
-                            // false positives from missed alignments.
-                            let _ = unification.keep(&anti_graph, sentence);
+                        // an antipattern with a unification only blocks when
+                        // the unification is satisfied (e.g. "det and noun
+                        // actually agree" must not block the disagreement
+                        // rule). The composition returns only one alignment;
+                        // checking keep() on it mirrors LT closely enough.
+                        let unification_ok = antipattern
+                            .unification
+                            .as_ref()
+                            .map_or(true, |u| u.keep(&anti_graph, sentence));
+                        if !unification_ok {
+                            continue;
                         }
                         let anti_start = anti_graph.by_index(0).span.char().start;
                         let anti_end = anti_graph
