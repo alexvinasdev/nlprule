@@ -200,7 +200,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | en   | 1000      | 101        | 106     | 0.85               | 0.84           | 0.88    |
 | fr   | 1000      | 71        | 77     | 0.89               | 0.88           | 0.91    |
 | ar   | 616       | 50           | 62      | 0.87               | 0.84           | 0.89    |
-| ca   | 1000      | 133        | 129     | 0.78               | 0.78           | 0.85    |
+| ca   | 1000      | 121        | 106     | 0.80               | 0.82           | 0.88    |
 
 This includes the Java-only built-in rules that have no XML representation,
 ported to Rust (see "ported" below): `UPPERCASE_SENTENCE_START` (with the
@@ -225,7 +225,7 @@ into:
   (needs the ArabicNumbersWords number-to-words engine).
 - `es` (0.92/0.90): the sentence splitter now matches LT 6.5 exactly (see the
   SRX note below), so `UPPERCASE_SENTENCE_START` fires on the same fragments.
-- `ca` (0.78/0.78): the 22 rules previously dropped for parallel-token
+- `ca` (0.80/0.82): the 22 rules previously dropped for parallel-token
   control flow compile now (skip gaps on `<and>`/`<or>` members are hoisted
   after the group like LT applies them, and a `min="0"` member makes the
   group optional — FALTA_ELEMENT_ENTRE_VERBS, AL_FRONT, FICAR_POSAR, TE,
@@ -233,7 +233,7 @@ into:
   `SuppressIfAnyRuleMatchesFilter` is ported (re-analyzes the sentence with
   each replacement applied and suppresses the match if any listed rule
   fires overlapping — QUE_INICIAL_*/MES1 match the server). Residue:
-  `PRONOMS_FEBLES_SOLTS1` over-firing on article/pronoun ambiguities,
+  word-internal contractions are split like LT's CatalanWordTokenizer ("del" -> "de" + "l", also al/als/dels/pel/pels/can), which makes the CONCORDANCES_DET_* agreement family fire; residue: `PRONOMS_FEBLES_SOLTS1` over-firing on article/pronoun ambiguities,
   `MUNICIPIS_VALENCIA` (external toponym data), the CONCORDANCES_DET_* gender-agreement family, `SPELLOUT_NUMBERS`
   (CatalanNumberSpellerFilter) and `ES_UNKNOWN` (FindSuggestionsEsFilter).
 - `fr` (0.88/0.88): the `D_N` determiner-noun agreement family now fires

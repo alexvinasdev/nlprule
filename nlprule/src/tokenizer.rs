@@ -77,6 +77,11 @@ pub(crate) struct TokenizerLangOptions {
     /// CJK dictionary-based word segmentation to use ("jieba" for Chinese).
     #[serde(default)]
     pub cjk_segmentation: Option<String>,
+    /// Split word-internal contractions the way the language's LT word
+    /// tokenizer does ("ca": al/als/del/dels/pel/pels/can -> preposition +
+    /// article, e.g. "del" -> "de" + "l").
+    #[serde(default)]
+    pub split_contractions: Option<String>,
 }
 
 impl Default for TokenizerLangOptions {
@@ -89,6 +94,7 @@ impl Default for TokenizerLangOptions {
             extra_split_chars: Vec::new(),
             extra_join_regexes: Vec::new(),
             cjk_segmentation: None,
+            split_contractions: None,
         }
     }
 }
@@ -275,6 +281,28 @@ impl Tokenizer {
                         split_char(c) || self.lang_options.extra_split_chars.contains(&c)
                     }));
                 }
+            }
+
+            // LT CatalanWordTokenizer patterns[9]/[10]: contractions split
+            // into preposition + article as two tokens ("del" -> "de" + "l");
+            // the second part has no space before it because its span is
+            // inside the original word
+            if self.lang_options.split_contractions.as_deref() == Some("ca") {
+                let mut split2 = Vec::with_capacity(tokens.len());
+                for token in tokens {
+                    let second_len = match token {
+                        "al" | "del" | "pel" | "can" => 1,
+                        "als" | "dels" | "pels" => 2,
+                        _ => {
+                            split2.push(token);
+                            continue;
+                        }
+                    };
+                    let split_at = token.len() - second_len;
+                    split2.push(&token[..split_at]);
+                    split2.push(&token[split_at..]);
+                }
+                tokens = split2;
             }
 
             // CJK text has no whitespace word boundaries: segment it with a
