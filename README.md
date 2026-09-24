@@ -194,13 +194,14 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 |------|-----------|--------------|---------|--------------------|----------------|---------|
 | de   | 1000      | 11        | 16     | 0.97               | 0.96           | 0.98    |
 | uk   | 1000      | 38        | 29     | 0.95               | 0.96           | 0.96    |
+| ru   | 1000      | 59        | 64     | 0.93               | 0.92           | 0.94    |
 | es   | 1000      | 57        | 71     | 0.92               | 0.90           | 0.93    |
-| pt   | 1000      | 71        | 84     | 0.89               | 0.87           | 0.91    |
-| ru   | 1000      | 106        | 87    | 0.88               | 0.90           | 0.89    |
-| en   | 1000      | 101        | 106     | 0.85               | 0.84           | 0.88    |
-| fr   | 1000      | 71        | 77     | 0.89               | 0.88           | 0.91    |
-| ar   | 616       | 50           | 62      | 0.87               | 0.84           | 0.89    |
+| fr   | 1000      | 58        | 75     | 0.90               | 0.88           | 0.93    |
+| pt   | 1000      | 62        | 83     | 0.90               | 0.87           | 0.91    |
 | ca   | 1000      | 66         | 91      | 0.89               | 0.85           | 0.90    |
+| ar   | 616       | 51           | 63      | 0.87               | 0.84           | 0.89    |
+| en   | 1000      | 100        | 105     | 0.85               | 0.85           | 0.88    |
+| nl   | 1000      | 165        | 206     | 0.80               | 0.77           | 0.79    |
 
 This includes the Java-only built-in rules that have no XML representation,
 ported to Rust (see "ported" below): `UPPERCASE_SENTENCE_START` (with the
@@ -236,17 +237,17 @@ into:
   word-internal contractions are split like LT's CatalanWordTokenizer ("del" -> "de" + "l", also al/als/dels/pel/pels/can), which makes the CONCORDANCES_DET_* agreement family fire; residue: `PRONOMS_FEBLES_SOLTS1` over-firing on article/pronoun ambiguities,
   `MUNICIPIS_VALENCIA` (external toponym data), the CONCORDANCES_DET_* gender-agreement family, `SPELLOUT_NUMBERS`
   (CatalanNumberSpellerFilter) and `ES_UNKNOWN` (FindSuggestionsEsFilter).
-- `fr` (0.88/0.88): the `D_N` determiner-noun agreement family now fires
+- `fr` (0.90/0.88): the `D_N` determiner-noun agreement family now fires
   (the antipattern-unification bug is fixed); the residue is tagger
   reading differences and the rules still dropped for parallel-token
   control flow.
-- `en` (0.85/0.85): the OpenNLP chunker is ported and loaded from
+- `en` (0.85/0.85, picky rules now off like the server's default level): the OpenNLP chunker is ported and loaded from
   `chunker.json` (chunks like `B-NP-singular`/`I-NP`/`E-NP`/`B-VP` verified);
   the residue is speller-backed rules (`EN_CONTRACTION_SPELLING`,
   `EN_SPLIT_WORDS_HYPHEN`) and `MORFOLOGIK_RULE_EN_US` over-firing.
-- `ru` (0.88/0.90): mostly tagger differences on the `giloj_gilichnij`
+- `ru` (0.93/0.92): mostly tagger differences on the `giloj_gilichnij`
   stemmer-like pairs and `MORFOLOGIK_RULE_RU_RU` suggestion-order details.
-- `es`/`pt`: small; much of it is the same error caught by a variant rule
+- `es`/`pt` (0.90/0.87 for pt after picky off): small; much of it is the same error caught by a variant rule
   (LT fires `HOLA_COMO_ESTAS` where nlprule fires `OLA_HOLA`).
 - `de`'s speller (`MORFOLOGIK_RULE_DE_DE`) is disabled: `GermanSpellerRule`
   decomposes compounds before lookup and without that port every
