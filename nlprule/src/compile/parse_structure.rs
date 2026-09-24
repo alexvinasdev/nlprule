@@ -582,25 +582,64 @@ fn get_last_id(parts: &[Part]) -> isize {
     parts.iter().fold(1, |a, x| a + x.visible as isize)
 }
 
-fn parse_parallel_tokens(
+/// Parses the tokens of an `<and>`/`<or>` group. Tokens with a `skip`
+/// attribute produce a second, invisible gap part in `parse_token`; LT
+/// applies that skip after the group matched, so the gaps are hoisted out
+/// of the group and merged (or-combined exception atoms, maximum skip
+/// distance) into a single gap part appended after the group.
+/// A member with `min="0"` makes the whole group optional (LT treats the
+/// or-group as one element whose alternatives include the zero-width case).
+/// Returns the member atoms, the group quantifier and the merged gap part.
+fn parse_group_tokens(
     tokens: &[structure::Token],
     case_sensitive: bool,
     info: &mut BuildInfo,
-) -> Result<Vec<Atom>, Error> {
-    tokens
-        .iter()
-        .map(|x| {
-            let mut parsed = parse_token(x, case_sensitive, info)?;
+) -> Result<(Vec<Atom>, Quantifier, Option<Part>), Error> {
+    let mut atoms = Vec::new();
+    let mut gap_atom: Option<Atom> = None;
+    let mut gap_max = 0usize;
+    let mut group_min = 1usize;
+    let mut group_max = 1usize;
 
-            if parsed.len() != 1 || parsed[0].quantifier.min != 1 || parsed[0].quantifier.max != 1 {
-                return Err(Error::Unimplemented(
-                    "control flow in parallel tokens is not implemented.".into(),
-                ));
-            }
+    for x in tokens {
+        let mut parsed = parse_token(x, case_sensitive, info)?;
 
-            Ok(parsed.remove(0).atom)
-        })
-        .collect()
+        if parsed.len() > 2 {
+            return Err(Error::Unimplemented(
+                "control flow in parallel tokens is not implemented.".into(),
+            ));
+        }
+
+        let part = parsed.remove(0);
+        if part.quantifier.max > 1 {
+            return Err(Error::Unimplemented(
+                "control flow in parallel tokens is not implemented.".into(),
+            ));
+        }
+        if part.quantifier.min == 0 {
+            group_min = 0;
+        }
+        atoms.push(part.atom);
+
+        if let Some(gap) = parsed.pop() {
+            gap_max = gap_max.max(gap.quantifier.max);
+            let atom = match gap_atom {
+                Some(existing) => OrAtom::or(vec![existing, gap.atom]),
+                None => gap.atom,
+            };
+            gap_atom = Some(atom);
+        }
+    }
+
+    let gap = gap_atom.map(|atom| Part {
+        atom,
+        quantifier: Quantifier::new(0, gap_max),
+        visible: false,
+        greedy: false,
+        unify: None,
+    });
+
+    Ok((atoms, Quantifier::new(group_min, group_max), gap))
 }
 
 fn parse_tokens(
@@ -614,25 +653,32 @@ fn parse_tokens(
         out.extend(match token_combination {
             structure::TokenCombination::Token(token) => parse_token(token, case_sensitive, info)?,
             structure::TokenCombination::And(tokens) => {
-                let atom =
-                    AndAtom::and(parse_parallel_tokens(&tokens.tokens, case_sensitive, info)?);
-                vec![Part {
+                let (atoms, quantifier, gap) =
+                    parse_group_tokens(&tokens.tokens, case_sensitive, info)?;
+                let atom = AndAtom::and(atoms);
+                let mut parts = vec![Part {
                     atom,
-                    quantifier: Quantifier::new(1, 1),
+                    quantifier,
                     greedy: true,
                     visible: true,
                     unify: tokens.tokens[0].unify.as_ref().map(|x| x == "yes"),
-                }]
+                }];
+                parts.extend(gap);
+                parts
             }
             structure::TokenCombination::Or(tokens) => {
-                let atom = OrAtom::or(parse_parallel_tokens(&tokens.tokens, case_sensitive, info)?);
-                vec![Part {
+                let (atoms, quantifier, gap) =
+                    parse_group_tokens(&tokens.tokens, case_sensitive, info)?;
+                let atom = OrAtom::or(atoms);
+                let mut parts = vec![Part {
                     atom,
-                    quantifier: Quantifier::new(1, 1),
+                    quantifier,
                     greedy: true,
                     visible: true,
                     unify: tokens.tokens[0].unify.as_ref().map(|x| x == "yes"),
-                }]
+                }];
+                parts.extend(gap);
+                parts
             }
             structure::TokenCombination::Feature(_) => Vec::new(),
         });
@@ -694,27 +740,32 @@ fn parse_pattern(
                 end = Some(get_last_id(&composition_parts));
             }
             structure::PatternPart::And(tokens) => {
-                let atom =
-                    AndAtom::and(parse_parallel_tokens(&tokens.tokens, case_sensitive, info)?);
+                let (atoms, quantifier, gap) =
+                    parse_group_tokens(&tokens.tokens, case_sensitive, info)?;
+                let atom = AndAtom::and(atoms);
 
                 composition_parts.push(Part {
                     atom,
-                    quantifier: Quantifier::new(1, 1),
+                    quantifier,
                     greedy: true,
                     visible: true,
                     unify: tokens.tokens[0].unify.as_ref().map(|x| x == "yes"),
                 });
+                composition_parts.extend(gap);
             }
             structure::PatternPart::Or(tokens) => {
-                let atom = OrAtom::or(parse_parallel_tokens(&tokens.tokens, case_sensitive, info)?);
+                let (atoms, quantifier, gap) =
+                    parse_group_tokens(&tokens.tokens, case_sensitive, info)?;
+                let atom = OrAtom::or(atoms);
 
                 composition_parts.push(Part {
                     atom,
-                    quantifier: Quantifier::new(1, 1),
+                    quantifier,
                     greedy: true,
                     visible: true,
                     unify: tokens.tokens[0].unify.as_ref().map(|x| x == "yes"),
                 });
+                composition_parts.extend(gap);
             }
             structure::PatternPart::Feature(_) => {}
             structure::PatternPart::Example(_) => {}
@@ -1086,6 +1137,13 @@ fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result
                 .collect::<Result<Vec<_>, Error>>()?,
         }),
         "AdaptSuggestionsFilter" => Ok(PostFilter::AdaptSuggestions { ca: package == "ca" }),
+        "SuppressIfAnyRuleMatchesFilter" => Ok(PostFilter::SuppressIfAny {
+            rule_ids: arg_value("ruleIDs")
+                .unwrap_or("")
+                .split(',')
+                .map(|x| x.to_string())
+                .collect(),
+        }),
         "DateCheckFilter" => {
             let dl = date_lang(&package)
                 .ok_or_else(|| Error::Unimplemented(format!("filter {} is not implemented.", name)))?;

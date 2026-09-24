@@ -358,6 +358,26 @@ impl Rules {
             return Vec::new();
         }
 
+        use crate::rule::post_filter::PostFilter;
+
+        // rule group id -> rule IDs to check, for rules carrying
+        // SuppressIfAnyRuleMatchesFilter (runs here because it needs the
+        // whole rule set and the tokenizer)
+        let suppress_specs: std::collections::HashMap<String, Vec<String>> = self
+            .rules
+            .iter()
+            .filter_map(|rule| {
+                if let Some(PostFilter::SuppressIfAny { rule_ids }) = &rule.post_filter {
+                    Some((
+                        rule.id.to_string().split('/').nth(1)?.to_string(),
+                        rule_ids.clone(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         let mut suggestions = Vec::new();
 
         // get suggestions sentence by sentence, carrying the text-level state
@@ -373,7 +393,62 @@ impl Rules {
                 prev_last_token: prev_last_token.clone(),
                 prev_numbered_list,
             };
-            suggestions.extend(self.apply_with_context(sentence, &ctx));
+
+            let mut sentence_suggestions = self.apply_with_context(sentence, &ctx);
+
+            if !suppress_specs.is_empty() {
+                sentence_suggestions.retain(|suggestion| {
+                    let group = suggestion
+                        .source()
+                        .split('/')
+                        .nth(1)
+                        .unwrap_or(suggestion.source())
+                        .to_string();
+                    let rule_ids = match suppress_specs.get(&group) {
+                        Some(ids) => ids,
+                        None => return true,
+                    };
+
+                    let sent_start = sentence.span().byte().start;
+                    let from = suggestion.span().byte().start - sent_start;
+                    let to = suggestion.span().byte().end - sent_start;
+                    let sentence_text = sentence.text();
+
+                    // LT: suppress if ANY replacement makes one of the
+                    // listed rules match the re-analyzed sentence (first
+                    // sentence) overlapping the original span
+                    for replacement in suggestion.replacements() {
+                        let new_sentence = format!(
+                            "{}{}{}",
+                            &sentence_text[..from],
+                            replacement,
+                            &sentence_text[to..]
+                        );
+                        if let Some(new_first) = tokenizer.pipe(&new_sentence).next() {
+                            for other in self.apply_with_context(&new_first, &ctx) {
+                                if !rule_ids
+                                    .iter()
+                                    .any(|id| {
+                                        other.source().split('/').nth(1) == Some(id.as_str())
+                                    })
+                                {
+                                    continue;
+                                }
+                                let (ofrom, oto) = (
+                                    other.span().byte().start,
+                                    other.span().byte().end,
+                                );
+                                if ofrom <= to && oto >= from {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                    true
+                });
+            }
+
+            suggestions.extend(sentence_suggestions);
 
             prev_last_token = crate::builtins::last_significant_token(sentence);
             prev_numbered_list = crate::builtins::is_numbered_list_item(sentence.text());

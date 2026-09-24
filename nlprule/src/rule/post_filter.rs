@@ -34,6 +34,12 @@ pub enum PostFilter {
     /// A ported Java `RuleFilter` class (dates, multitoken speller,
     /// find-suggestions, advanced synthesizer, ...).
     Java(JavaFilter),
+    /// Mirrors `SuppressIfAnyRuleMatchesFilter`: suppresses the match if,
+    /// after applying any suggested replacement, one of the given rule IDs
+    /// matches the re-analyzed sentence overlapping the original span.
+    /// Needs the whole rule set and the tokenizer, so the actual check runs
+    /// in `Rules::suggest`; at the per-rule stage this is a pass-through.
+    SuppressIfAny { rule_ids: Vec<String> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +206,11 @@ impl PostFilter {
                 }
             }
             PostFilter::Java(_) => unreachable!("handled above"),
+            PostFilter::SuppressIfAny { .. } => Some(FilteredMatch {
+                span,
+                replacements,
+                message: None,
+            }),
         }
     }
 }

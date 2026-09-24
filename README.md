@@ -196,11 +196,11 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | uk   | 1000      | 38        | 29     | 0.95               | 0.96           | 0.96    |
 | es   | 1000      | 57        | 71     | 0.92               | 0.90           | 0.93    |
 | pt   | 1000      | 71        | 84     | 0.89               | 0.87           | 0.91    |
-| ru   | 1000      | 105        | 94     | 0.88               | 0.90           | 0.88    |
+| ru   | 1000      | 106        | 87    | 0.88               | 0.90           | 0.89    |
 | en   | 1000      | 101        | 106     | 0.85               | 0.84           | 0.88    |
-| fr   | 1000      | 71        | 78     | 0.88               | 0.88           | 0.91    |
+| fr   | 1000      | 71        | 77     | 0.89               | 0.88           | 0.91    |
 | ar   | 616       | 50           | 62      | 0.87               | 0.84           | 0.89    |
-| ca   | 1000      | 165        | 154     | 0.73               | 0.74           | 0.82    |
+| ca   | 1000      | 141        | 134     | 0.77               | 0.78           | 0.85    |
 
 This includes the Java-only built-in rules that have no XML representation,
 ported to Rust (see "ported" below): `UPPERCASE_SENTENCE_START` (with the
@@ -223,20 +223,27 @@ into:
   (30.5M forms, validated 400/400 against the server's accept/reject). The
   residue is gender subrule-variant selection and `ArabicNumberPhraseFilter`
   (needs the ArabicNumbersWords number-to-words engine).
-- `ca` (0.73/0.74): ANALISI_FEM/VESSANT fixed (ConvertToGenderAndNumberFilter
-  now walks the whole sentence with Java's insert order) and sentence-initial
-  DET+NOUN agreement fires (filters receive LT's contiguous pattern-token
-  range incl SENT_START). Residue: `PRONOMS_FEBLES_SOLTS1` over-firing on
-  article/pronoun ambiguities, `MUNICIPIS_VALENCIA` (external toponym data),
-  and ~40 rules still dropped for parallel-token control flow.
+- `es` (0.92/0.90): the sentence splitter now matches LT 6.5 exactly (see the
+  SRX note below), so `UPPERCASE_SENTENCE_START` fires on the same fragments.
+- `ca` (0.77/0.78): the 22 rules previously dropped for parallel-token
+  control flow compile now (skip gaps on `<and>`/`<or>` members are hoisted
+  after the group like LT applies them, and a `min="0"` member makes the
+  group optional — FALTA_ELEMENT_ENTRE_VERBS, AL_FRONT, FICAR_POSAR, TE,
+  ... fire at the same offsets as the server), and
+  `SuppressIfAnyRuleMatchesFilter` is ported (re-analyzes the sentence with
+  each replacement applied and suppresses the match if any listed rule
+  fires overlapping — QUE_INICIAL_*/MES1 match the server). Residue:
+  `PRONOMS_FEBLES_SOLTS1` over-firing on article/pronoun ambiguities,
+  `MUNICIPIS_VALENCIA` (external toponym data), `SPELLOUT_NUMBERS`
+  (CatalanNumberSpellerFilter) and `ES_UNKNOWN` (FindSuggestionsEsFilter).
 - `fr` (0.88/0.88): the `D_N` determiner-noun agreement family now fires
   (the antipattern-unification bug is fixed); the residue is tagger
   reading differences and the rules still dropped for parallel-token
   control flow.
-- `en` (0.85/0.85): the OpenNLP chunker (2k `chunk=` references) plus
-  speller-backed rules (`EN_CONTRACTION_SPELLING`,
-  `EN_SPLIT_WORDS_HYPHEN`); a residue of `UPPERCASE_SENTENCE_START` from
-  sentence-split differences on short unpunctuated fragments.
+- `en` (0.85/0.85): the OpenNLP chunker is ported and loaded from
+  `chunker.json` (chunks like `B-NP-singular`/`I-NP`/`E-NP`/`B-VP` verified);
+  the residue is speller-backed rules (`EN_CONTRACTION_SPELLING`,
+  `EN_SPLIT_WORDS_HYPHEN`) and `MORFOLOGIK_RULE_EN_US` over-firing.
 - `ru` (0.88/0.90): mostly tagger differences on the `giloj_gilichnij`
   stemmer-like pairs and `MORFOLOGIK_RULE_RU_RU` suggestion-order details.
 - `es`/`pt`: small; much of it is the same error caught by a variant rule
@@ -270,8 +277,22 @@ Language-specific notes:
   CompoundCheck, nl CompoundFilter, INN, DecadeSpelling, UppercaseNounReading,
   ConvertToSentenceCase, ConfusionCheck (es/pt), DiacriticsCheck (ca),
   RomanNumeral, RegularIrregularParticiple, ValidWord,
-  RemoveUnknownCompounds, WhitespaceCheck, plus the English `+DT`/`+INDT`
+  RemoveUnknownCompounds, WhitespaceCheck, SuppressIfAnyRuleMatches (the
+  re-analyze-with-replacement suppression, run in `Rules::suggest`), plus the
+  English `+DT`/`+INDT`
   determiner synthesis of `EnglishSynthesizer`
+- Sentence splitting matches LT 6.5's SRX semantics: LT's Java engine
+  (net.loomchild.segment) only honors a `break="no"` exception whose
+  `beforebreak` match *ends* exactly at the break candidate, while the Rust
+  `srx` crate anchors on capture group 1. All `data2/*/segment.srx` copies
+  are preprocessed accordingly: inner capture groups in `beforebreak`/
+  `afterbreak` are rewritten to non-capturing (so group 1 is the crate's
+  wrapper at the right offset) and the malformed Spanish abbreviation rule
+  (`\b([Ee]d(it)?|[Nn]o|n|...)|[V\.]gr\.[\s\u00A0]`, whose first top-level
+  branch is inert in LT but masked word starts in the crate) is replaced by
+  its LT-effective form `[V\.]gr\.[\s\u00A0]`. Verified against the server:
+  `Cosas. palabra` and `No. vino ayer.` split, `p. ej. esto funciona.`,
+  `Sr.`/`núm.`/`Ed.` stay joined.
 - Also ported: ca's pronoun/verb-morphology filters (AdjustPronouns,
   AdjustVerbSuggestions, AnarA, DonarTemps, Oblidarse, PortarGerundi,
   PortarTemps, PronomsFeblesHelper with the full weak-pronoun transformation
@@ -282,11 +303,11 @@ Language-specific notes:
   arithmetic), en AdverbFilter, the disambiguation `addchunk` action (GV /
   PTime chunks for ca+es), and `IsEnglishWordFilter` (approximated with a
   frequency list of the 20k most common English words)
-- Still unported: `en`'s chunker (4.8k chunk references in `grammar.xml` need
-  a port of LT's OpenNLP chunker models; the runtime chunk matcher exists),
-  ar ArabicNumberPhraseFilter (needs ArabicNumbersWords) and
+- Still unported: ar ArabicNumberPhraseFilter (needs ArabicNumbersWords) and
   `HUNSPELL_RULE_AR` (hunspell affix expansion of `ar.dic`), de's
   `MORFOLOGIK_RULE_DE_DE` (needs GermanSpellerRule's compound decomposition),
+  ca CatalanNumberSpellerFilter (needs the Catalan number speller) and
+  ca's `FindSuggestionsEsFilter` variant,
   pt BrazilianToponymFilter (LT `<regexp>` rules are a separate rule type),
   WordWithDeterminer's `suggestionHasNoErrors` re-validation, and rules that
   are pure Java in LT with no XML (pl stemmer rules, the remaining
