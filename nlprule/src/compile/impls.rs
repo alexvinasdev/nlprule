@@ -461,6 +461,20 @@ impl Rules {
                         Some(x) => panic!("unknown `default` value: {}", x),
                     };
 
+                    // LT 6.x: rules tagged "picky" (on the rule or its
+                    // group) are off at the default level, which is what
+                    // the HTTP server runs
+                    let picky_off = rule_structure
+                        .tags
+                        .as_deref()
+                        .map(|x| x.split_whitespace().any(|t| t == "picky"))
+                        .unwrap_or(false)
+                        || group
+                            .as_ref()
+                            .and_then(|g| g.tags.as_deref())
+                            .map(|x| x.split_whitespace().any(|t| t == "picky"))
+                            .unwrap_or(false);
+
                     let category_on = match category.default.as_deref() {
                         Some("off") | Some("temp_off") => false,
                         Some("on") | None => true,
@@ -490,7 +504,7 @@ impl Rules {
                                 rule.name = name;
                                 rule.category_name = category.name;
                                 rule.category_type = category.kind;
-                                rule.enabled = category_on && group_on && rule_on;
+                                rule.enabled = category_on && group_on && rule_on && !picky_off;
                                 Some(rule)
                             } else {
                                 None

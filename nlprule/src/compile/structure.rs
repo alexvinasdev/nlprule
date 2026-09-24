@@ -187,6 +187,8 @@ pub struct Group {
     pub id: String,
     pub name: String,
     pub default: Option<String>,
+    /// Rule metadata tag (LT 6.x), e.g. "picky".
+    pub tags: Option<String>,
     pub n: usize,
 }
 
@@ -666,6 +668,9 @@ pub struct DisambiguationRuleGroup {
     #[serde(rename = "rule")]
     pub rules: Vec<DisambiguationRule>,
     pub default: Option<String>,
+    /// Rule metadata tag (LT 6.x), e.g. "picky".
+    #[serde(default)]
+    pub tags: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -712,6 +717,7 @@ macro_rules! flatten_group {
             id: $rulegroup.id,
             default: $rulegroup.default,
             name: $rulegroup.name,
+            tags: $rulegroup.tags,
             n: 0,
         };
 
