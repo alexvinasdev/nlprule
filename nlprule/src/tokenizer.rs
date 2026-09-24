@@ -290,7 +290,10 @@ impl Tokenizer {
             if self.lang_options.split_contractions.as_deref() == Some("ca") {
                 let mut split2 = Vec::with_capacity(tokens.len());
                 for token in tokens {
-                    let second_len = match token {
+                    // case-insensitive so sentence-initial "Als" also splits
+                    // (LT rebuilds the parts preserving case, e.g. "A" + "ls")
+                    let lower = token.to_lowercase();
+                    let second_len = match lower.as_str() {
                         "al" | "del" | "pel" | "can" => 1,
                         "als" | "dels" | "pels" => 2,
                         _ => {
