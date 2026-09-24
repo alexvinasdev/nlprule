@@ -4162,10 +4162,13 @@ fn convert_to_gender_and_number(ctx: &mut FilterCtx, replacements: Vec<String>) 
     // SENT_START included) to pick up determiners/prepositions/adjectives
     // around the match - not just the matched tokens
     let tokens = ctx.sentence_tokens();
-    // first token at/after the match start
+    // first token at/after the match start; LT also skips the SENT_START
+    // token itself (`tokens[posWord].isSentenceStart()`), which shares the
+    // match start offset when the match begins the sentence
     let mut pos_word = 0;
     while pos_word < tokens.len()
-        && tokens[pos_word].span().char().start < ctx.span.char().start
+        && (tokens[pos_word].span().char().start < ctx.span.char().start
+            || tokens[pos_word].span().char().start == tokens[pos_word].span().char().end)
     {
         pos_word += 1;
     }
