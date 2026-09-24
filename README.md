@@ -161,7 +161,7 @@ tagger dictionaries in the LT distribution itself.
 | ca | 14545 | 10877 | pl | 1842 | 1491      |
 | crh            | 93         | 17        | pt | 1978 | 956 |
 | da             | 78         | 61        | ro     | 1167       | 1116      |
-| de | 5480 | 5193 | ru | 1174 | 986 |
+| de | 5480 | 5193 | ru | 1180 | 988 |
 | de-DE-x-simple | 92         | 40        | sk     | 206        | 184       |
 | el             | 98         | 95        | sl     | 85         | 82        |
 | en | 5718 | 4867 | sr     | 45         | 44        |
@@ -196,7 +196,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | uk   | 1000      | 38        | 29     | 0.95               | 0.96           | 0.96    |
 | es   | 1000      | 57        | 71     | 0.92               | 0.90           | 0.93    |
 | pt   | 1000      | 71        | 84     | 0.89               | 0.87           | 0.91    |
-| ru   | 1000      | 111        | 93     | 0.87               | 0.89           | 0.88    |
+| ru   | 1000      | 105        | 94     | 0.88               | 0.90           | 0.88    |
 | en   | 1000      | 101        | 106     | 0.85               | 0.84           | 0.88    |
 | fr   | 1000      | 71        | 78     | 0.88               | 0.88           | 0.91    |
 | ar   | 616       | 50           | 62      | 0.87               | 0.84           | 0.89    |
@@ -237,7 +237,7 @@ into:
   speller-backed rules (`EN_CONTRACTION_SPELLING`,
   `EN_SPLIT_WORDS_HYPHEN`); a residue of `UPPERCASE_SENTENCE_START` from
   sentence-split differences on short unpunctuated fragments.
-- `ru` (0.87/0.89): mostly tagger differences on the `giloj_gilichnij`
+- `ru` (0.88/0.90): mostly tagger differences on the `giloj_gilichnij`
   stemmer-like pairs and `MORFOLOGIK_RULE_RU_RU` suggestion-order details.
 - `es`/`pt`: small; much of it is the same error caught by a variant rule
   (LT fires `HOLA_COMO_ESTAS` where nlprule fires `OLA_HOLA`).
