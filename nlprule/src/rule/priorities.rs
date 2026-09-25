@@ -187,6 +187,130 @@ fn es_static(id: &str) -> Option<i32> {
     })
 }
 
+
+fn pt_static(id: &str) -> Option<i32> {
+    Some(match id {
+        "FRAGMENT_TWO_ARTICLES" => 50,
+        "DEGREE_MINUTES_SECONDS" => 30,
+        "INTERJECTIONS_PUNTUATION" => 20,
+        "CONFUSION_POR_PÔR_V2" | "PARONYM_POLITICA_523" | "PARONYM_PRONUNCIA_262"
+        | "PARONYM_CRITICA_397" | "PARONYM_INICIO_169" | "LP_PARONYMS"
+        | "PARONYM_MUSICO_499_bis" | "NA_NÃO" | "VERB_COMMA_CONJUNCTION" => 10,
+        "HOMOPHONE_AS_CARD" => 5,
+        "TODOS_FOLLOWED_BY_NOUN_PLURAL" => 3,
+        "TODOS_FOLLOWED_BY_NOUN_SINGULAR" => 2,
+        "AUSENCIA_VIRGULA" | "EMAIL" => 1,
+        "UNPAIRED_BRACKETS" => -5,
+        "PROFANITY" => -6,
+        "PT_BARBARISMS_REPLACE" | "BARBARISMS_PT_PT_V3" => -10,
+        "PT_PT_SIMPLE_REPLACE" => -11,
+        "PT_REDUNDANCY_REPLACE" => -12,
+        "PT_WORDINESS_REPLACE" => -13,
+        "PT_CLICHE_REPLACE" => -17,
+        "INTERNET_ABBREVIATIONS" => -24,
+        "CHILDISH_LANGUAGE" => -25,
+        "ARCHAISMS" => -26,
+        "INFORMALITIES" => -27,
+        "BIASED_OPINION_WORDS" => -31,
+        "PT_AGREEMENT_REPLACE" => -35,
+        "CONTA_TO" => -44,
+        "PT_DIACRITICS_REPLACE" | "DIACRITICS" | "PT_COMPOUNDS_POST_REFORM"
+        | "AUX_VERBO" | "ENSINO_A_DISTANCIA" | "OQ_O_QUE_ORTHOGRAPHY"
+        | "PT_ENGLISH_CONTRACTION_ORTHOGRAPHY" | "EMAIL_SEM_HIFEN" => -45,
+        "PRETERITO_PERFEITO" | "PT_BR_SIMPLE_REPLACE" => -51,
+        "CRASE_CONFUSION" | "NAO_MILITARES" | "NA_QUELE" | "NOTAS_FICAIS" => -54,
+        "GENERAL_VERB_AGREEMENT_ERRORS" => -55,
+        "GENERAL_NUMBER_AGREEMENT_ERRORS"
+        | "GENERAL_GENDER_NUMBER_AGREEMENT_ERRORS" => -56,
+        "FINAL_STOPS" => -75,
+        "FAZER_USO_DE-USAR-RECORRER" => -90,
+        "FORMAL_T_V_DISTINCTION" => -100,
+        "FORMAL_T_V_DISTINCTION_ALL" => -101,
+        "REPEATED_WORDS" => -210,
+        "PT_WIKIPEDIA_COMMON_ERRORS" => -500,
+        "FILLER_WORDS_PT" => -990,
+        "TOO_LONG_SENTENCE" => -997,
+        "TOO_LONG_PARAGRAPH" => -998,
+        "READABILITY_RULE_SIMPLE_PT" => -1100,
+        "READABILITY_RULE_DIFFICULT_PT" => -1101,
+        "UNKNOWN_WORD" => -2000,
+        _ => return None,
+    })
+}
+
+
+fn de_static(id: &str) -> Option<i32> {
+    Some(match id {
+        "DE_PROHIBITED_PHRASE" => 11,
+        "WRONG_SPELLING_PREMIUM_INTERNAL" | "OLD_SPELLING_RULE" | "DE_COMPOUNDS"
+        | "E_MAIL_SIGNATUR" | "TELEFON_NR" | "IRGEND_COMPOUND" => 10,
+        "DA_DURCH" | "BEI_GOOGLE" | "EINE_ORIGINAL_RECHNUNG_TEST"
+        | "VON_SEITEN_RECOMMENDATION" | "AUFFORDERUNG_SIE" | "WEIS_ICH"
+        | "VONSTATTEN_GEHEN" => 2,
+        "VERWANDET_VERWANDTE" => 1,
+        "DA_VOR" | "DAS_WUENSCHE_ICH" | "KLEINSCHREIBUNG_MAL"
+        | "VERINF_DAS_DASS_SUB" | "IM_ALTER" | "DAS_ALTER"
+        | "VER_INF_PKT_VER_INF" | "DASS_MIT_VERB" | "AB_TEST" | "BZGL_ABK"
+        | "DURCH_WACHSEN" | "RUNDUM_SORGLOS_PAKET"
+        | "MIT_FREUNDLICHEN_GRUESSE" | "OK" | "EINE_ORIGINAL_RECHNUNG"
+        | "WAEHRUNGSANGABEN_CHF" => 1,
+        "FALSCHES_ANFUEHRUNGSZEICHEN" | "VER_KOMMA_PRO_RIN"
+        | "VER_INF_VER_INF" | "DE_COMPOUND_COHERENCY" | "GEFEATURED"
+        | "NUMBER_SUB" | "MFG" | "VER123_VERAUXMOD" | "DE_AGREEMENT"
+        | "DE_AGREEMENT2" | "KOMMA_NEBEN_UND_HAUPTSATZ"
+        | "FALSCHES_RELATIVPRONOMEN" | "AKZENT_STATT_APOSTROPH"
+        | "BEENDE_IST_SENTEND" | "VER_ADJ_ZU_SCHLAFEN" | "MIO_PUNKT"
+        | "AUSLASSUNGSPUNKTE_LEERZEICHEN"
+        | "IM_ERSCHEINUNG_SPELLING_RULE" | "SPACE_BEFORE_OG"
+        | "VERSEHENTLICHERWEISE" | "VERMOD_SKIP_VER_PKT" | "N_NETTER_TYP" => -1,
+        "EINZELBUCHSTABE_PREMIUM" | "ART_IND_ADJ_SUB" | "KATARI"
+        | "SCHOENE_WETTER" | "MEIN_KLEIN_HAUS" | "UNPAIRED_BRACKETS"
+        | "DE_UNPAIRED_QUOTES" | "ICH_GLAUBE_FUER_EUCH"
+        | "OBJECT_AGREEMENT" | "ICH_INF_PREMIUM" | "MEHRERE_WOCHE_PREMIUM"
+        | "DOPPELTER_NOMINATIV" | "KUDAMM"
+        | "ALTERNATIVEN_FUER_ANGLIZISMEN" | "DOPPELUNG_VER_MOD_AUX"
+        | "ANGLIZISMEN" | "ANGLIZISMUS_PA_MIT_ED" | "MEINSTE" | "ICH_LIEBS"
+        | "WENNS_UND_ABERS" | "ABERS_SATZANFANG_SPELLING_RULE" | "VERNEB"
+        | "ZAHL_IM_WORT_SPELLING_RULE" => -2,
+        "GERMAN_SPELLER_RULE" | "AUSTRIAN_GERMAN_SPELLER_RULE"
+        | "SWISS_GERMAN_SPELLER_RULE" => -3,
+        "DE_VERBAGREEMENT" | "PUNKT_ENDE_DIREKTE_REDE"
+        | "LEERZEICHEN_NACH_VOR_ANFUEHRUNGSZEICHEN"
+        | "ZEICHENSETZUNG_DIREKTE_REDE" | "GROSSSCHREIBUNG_WOERTLICHER_REDE"
+        | "IM_IHM_SPELLING_RULE" | "IN_UNKNOWNKLEIN_VER"
+        | "SEHR_GEEHRTER_NAME" | "DE_PHRASE_REPETITION"
+        | "FRAGEZEICHEN_NACH_DIREKTER_REDE" | "PUNCTUATION_PARAGRAPH_END"
+        | "F_ANSTATT_PH_2" => -4,
+        "DAS_WETTER_IST" | "VEREIZ_VERINF_PKT" | "WER_STARK_SCHWITZ"
+        | "VERBEN_PRAEFIX_AUS" | "ANFUEHRUNG_VERSCHACHTELT"
+        | "SATZBAU_AN_DEN_KOMMT" | "SUBJECT_VERB_AGREEMENT" => -5,
+        "SAGT_SAGT" => -9,
+        "VON_LEBENSLAEUFE_SPELLING_RULE" | "VER_WER_VER_3" | "PA_WAS"
+        | "ICH_GEHE_DU_BLEIBST" | "PROPERNOMSIN_VERIMPSIN"
+        | "DIESE_HABE_ER_BELEIDIGTE" | "VER123_VERAUXMOD_TEST1"
+        | "ZUSAMMENGESETZTE_VERBEN" => -12,
+        "PRP_VER_PRGK" | "COMMA_IN_FRONT_RELATIVE_CLAUSE" | "SAGT_RUFT"
+        | "KANNST_WERDEN" => -13,
+        "KOMMA_ZWISCHEN_HAUPT_UND_NEBENSATZ_2" | "MAN_SIEHT_SEHR_SCHOEN"
+        | "BEI_VERB" | "MODALVERB_FLEKT_VERB" | "DATIV_NACH_PRP"
+        | "DAT_ODER_AKK_NACH_PRP" | "SENT_START_SIN_PLU"
+        | "SENT_START_PLU_SIN" | "VER_INFNOMEN" => -14,
+        "GERMAN_WORD_REPEAT_RULE" | "TOO_LONG_PARAGRAPH" | "ALL_UPPERCASE" => -15,
+        "NUR_LEDIGLICH" => -16,
+        "COMMA_BEHIND_RELATIVE_CLAUSE" | "DOPPELUNG_MODALVERB"
+        | "VER_DOPPELUNG" | "DEF_ARTIKEL_INDEF_ADJ" | "PRP_ADJ_AGREEMENT"
+        | "SIE_WOLLTEN_SIND" | "ART_ADJ_SOL" | "WURDEN_WORDEN_1"
+        | "WAR_WAHR" => -52,
+        "KOMMA_ZWISCHEN_HAUPT_UND_NEBENSATZ" | "VERB_IST" | "WAR_WERDEN"
+        | "INF_VER_MOD_SPELLING_RULE" | "DOPPELTES_VERB" => -53,
+        "VERB_FEM_SUBST" | "SUBJUNKTION_KOMMA_2" => -54,
+        "DOPPELUNG_GLEICHES_VERB" => -55,
+        "FEHLENDES_NOMEN" | "REPETITIONS_STYLE" => -60,
+        "GERMAN_WORD_REPEAT_BEGINNING_RULE" => -61,
+        _ => return None,
+    })
+}
+
 /// Port of `Language.getPriorityForId` for the languages we build.
 pub(crate) fn priority_for_id(lang: Option<&str>, id: &str) -> i32 {
     let lang = match lang {
@@ -230,6 +354,32 @@ pub(crate) fn priority_for_id(lang: Option<&str>, id: &str) -> i32 {
             }
         }
         "es" => es_static(id).unwrap_or(0),
+        "pt" => {
+            if id.starts_with("MORFOLOGIK_RULE") {
+                return -50;
+            }
+            if id.starts_with("PT_SIMPLE_REPLACE_ORTHOGRAPHY") {
+                return -49;
+            }
+            if id.starts_with("AI_PT_GGEC_REPLACEMENT_ORTHOGRAPHY_SPELL")
+                || id.starts_with("PT_MULTITOKEN_SPELLING")
+            {
+                return -48;
+            }
+            if id.starts_with("AI_PT_GGEC_REPLACEMENT_OTHER") {
+                return -4;
+            }
+            if id.starts_with("ACENTUAÇÃO_VOGAL_ÊNCLISE")
+                || id.starts_with("AI_PT_HYDRA_LEO")
+            {
+                return -51;
+            }
+            if id.starts_with("COLOCACAO_PRONOMINAL_COM_ATRATOR") {
+                return -52;
+            }
+            pt_static(id).unwrap_or(0)
+        }
+        "de" => de_static(id).unwrap_or(0),
         "nl" => {
             if id.starts_with("NL_SIMPLE_REPLACE") {
                 1
