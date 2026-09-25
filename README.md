@@ -201,7 +201,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | ca   | 1000      | 66         | 91      | 0.89               | 0.85           | 0.90    |
 | ar   | 616       | 51           | 63      | 0.87               | 0.84           | 0.89    |
 | en   | 1000      | 100        | 105     | 0.85               | 0.85           | 0.88    |
-| nl   | 1000      | 165        | 206     | 0.80               | 0.77           | 0.79    |
+| nl   | 1000      | 147        | 186     | 0.83               | 0.79           | 0.81    |
 
 This includes the Java-only built-in rules that have no XML representation,
 ported to Rust (see "ported" below): `UPPERCASE_SENTENCE_START` (with the
@@ -249,6 +249,14 @@ into:
   stemmer-like pairs and `MORFOLOGIK_RULE_RU_RU` suggestion-order details.
 - `es`/`pt` (0.90/0.87 for pt after picky off): small; much of it is the same error caught by a variant rule
   (LT fires `HOLA_COMO_ESTAS` where nlprule fires `OLA_HOLA`).
+- `nl` (0.83/0.79): the 66k-line SimpleReplaceRule table is now a
+  dictionary-backed built-in with the server's `NL_SIMPLE_REPLACE_*`
+  sub-rule ids (and Dutch's priority-1 for that family); Dutch
+  mid-word apostrophes stay joined like `DutchWordTokenizer` ("zo'n"
+  is one token). Residue: the single IETS_KLEINS/GEURIGS_GURIGS
+  same-span tie (LT's insertion order there differs from the
+  reverse-grammar order that matches fr/de/ca/en/es) and tagger
+  reading differences.
 - `de`'s speller (`MORFOLOGIK_RULE_DE_DE`) is disabled: `GermanSpellerRule`
   decomposes compounds before lookup and without that port every
   non-listed compound would over-fire. `pl`'s stemmer-based rules and the
