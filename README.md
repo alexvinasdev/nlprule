@@ -200,7 +200,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | pt   | 1000      | 62        | 83     | 0.90               | 0.87           | 0.91    |
 | ca   | 1000      | 66         | 91      | 0.89               | 0.85           | 0.90    |
 | ar   | 616       | 51           | 63      | 0.87               | 0.84           | 0.89    |
-| en   | 1000      | 59         | 76      | 0.91               | 0.89           | 0.92    |
+| en   | 1000      | 54         | 78      | 0.92               | 0.89           | 0.92    |
 | nl   | 1000      | 137        | 176     | 0.84               | 0.80           | 0.82    |
 
 This includes the Java-only built-in rules that have no XML representation,
