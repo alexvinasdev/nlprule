@@ -12,7 +12,7 @@ pub struct PosFilter {
 }
 
 impl PosFilter {
-    fn is_word_data_match(&self, data: &WordData) -> bool {
+    pub(crate) fn is_word_data_match(&self, data: &WordData) -> bool {
         self.matcher.is_match(data.pos())
     }
 
@@ -22,6 +22,19 @@ impl PosFilter {
 
     fn remove(&self, data: &mut Word) {
         data.retain(|x| !self.is_word_data_match(x))
+    }
+
+    /// Like [PosFilter::and], but only readings that also satisfy the
+    /// optional element constraint are considered.
+    pub fn and_restricted(
+        filters: &[&Self],
+        data: &Word,
+        element: Option<&Self>,
+    ) -> bool {
+        data.tags().iter().any(|x| {
+            element.map_or(true, |e| e.is_word_data_match(x))
+                && filters.iter().all(|filter| filter.is_word_data_match(x))
+        })
     }
 
     pub fn and(filters: &[&Self], data: &Word) -> bool {

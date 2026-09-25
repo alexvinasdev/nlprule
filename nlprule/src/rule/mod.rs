@@ -41,6 +41,11 @@ use self::{
 pub(crate) struct Unification {
     pub(crate) mask: Vec<Option<bool>>,
     pub(crate) filters: Vec<Vec<PosFilter>>,
+    /// Per marked element, its own postag constraint: LT's Unifier derives
+    /// feature values only from readings that matched the element, so e.g.
+    /// a token matched as N.* contributes only its noun readings.
+    #[serde(default)]
+    pub(crate) element_filters: Vec<Option<PosFilter>>,
 }
 
 impl Unification {
@@ -50,11 +55,22 @@ impl Unification {
         let mut filter_mask: Vec<_> = filters.iter().map(|_| true).collect();
         let negate = self.mask.iter().all(|x| x.map_or(true, |x| !x));
 
-        for (group, maybe_mask_val) in graph.groups()[1..].iter().zip(self.mask.iter()) {
+        for ((group, maybe_mask_val), element_filter) in graph.groups()[1..]
+            .iter()
+            .zip(self.mask.iter())
+            .zip(self.element_filters.iter().chain(std::iter::repeat(&None)))
+        {
             if maybe_mask_val.is_some() {
                 for token in group.tokens(sentence) {
                     for (mask_val, filter) in filter_mask.iter_mut().zip(filters.iter()) {
-                        *mask_val = *mask_val && PosFilter::and(filter, token.word());
+                        // restrict to readings that satisfy the element's
+                        // own postag constraint before checking the feature
+                        let restricted = crate::rule::PosFilter::and_restricted(
+                            filter,
+                            token.word(),
+                            element_filter.as_ref(),
+                        );
+                        *mask_val = *mask_val && restricted;
                     }
                 }
             }

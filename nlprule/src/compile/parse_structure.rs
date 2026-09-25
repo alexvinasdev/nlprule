@@ -702,6 +702,7 @@ fn parse_antipatterns(
             None
         } else {
             Some(crate::rule::Unification {
+                element_filters: Vec::new(),
                 mask: unify_mask,
                 filters: unify_filters,
             })
@@ -887,7 +888,8 @@ impl Rule {
                 .iter()
                 .map(|part| part.unify)
                 .collect();
-            Some((unify_filters, unify_mask))
+            let element_filters = pattern_element_filters(&pattern, unify_mask.len(), info);
+            Some((unify_filters, unify_mask, element_filters))
         } else {
             None
         };
@@ -993,13 +995,14 @@ impl Rule {
             });
         }
 
-        let unification = if let Some((unify_filters, unify_mask)) = unify_data {
+        let unification = if let Some((unify_filters, unify_mask, element_filters)) = unify_data {
             if unify_filters.is_empty() {
                 None
             } else {
                 Some(Unification {
                     filters: unify_filters,
                     mask: unify_mask,
+                    element_filters,
                 })
             }
         } else {
@@ -1033,6 +1036,53 @@ impl Rule {
 /// Maps an LT `<filter>` (class + args) to a runtime [PostFilter].
 /// Ported Java filter classes become [PostFilter::Java]; unsupported classes
 /// return an error so the rule is skipped, as before.
+
+/// Per composition part: the pattern element's own postag constraint
+/// (None for invisible skip-gap parts), so runtime unification only
+/// considers readings the element actually matched, like LT's Unifier.
+fn pattern_element_filters(
+    pattern: &structure::Pattern,
+    expected_len: usize,
+    info: &mut BuildInfo,
+) -> Vec<Option<PosFilter>> {
+    let mut element_filters: Vec<Option<PosFilter>> = Vec::new();
+    let mut push_element = |token: &structure::Token| {
+        let filter = token
+            .postag
+            .as_ref()
+            .map(|x| parse_pos_filter(x, token.postag_regexp.as_deref(), info));
+        element_filters.push(filter);
+        if token.skip.is_some() {
+            element_filters.push(None);
+        }
+    };
+    for part in &pattern.parts {
+        match part {
+            structure::PatternPart::Token(token) => push_element(token),
+            structure::PatternPart::Marker(marker) => {
+                for token in &marker.tokens {
+                    match token {
+                        structure::TokenCombination::Token(t) => push_element(t),
+                        structure::TokenCombination::And(ts)
+                        | structure::TokenCombination::Or(ts) => push_element(&ts.tokens[0]),
+                        structure::TokenCombination::Feature(_) => {}
+                    }
+                }
+            }
+            structure::PatternPart::And(ts)
+            | structure::PatternPart::Or(ts) => push_element(&ts.tokens[0]),
+            structure::PatternPart::Feature(_) => {}
+            structure::PatternPart::Example(_) => {}
+        }
+    }
+    if element_filters.len() != expected_len {
+        // layout mismatch (unexpected pattern shape): fall back to
+        // unrestricted unification
+        element_filters = vec![None; expected_len];
+    }
+    element_filters
+}
+
 fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result<PostFilter, Error> {
     use crate::rule::filter_java::{DateLang, FindSuggVariant, JClass, JavaFilter};
     use crate::rule::post_filter::{PostFilter, UnderlineMode};
@@ -1356,6 +1406,7 @@ impl DisambiguationRule {
 
         let unify_filters = parse_features(&data.pattern, &data.unifications, info);
         let unify_mask: Vec<_> = composition.parts.iter().map(|part| part.unify).collect();
+        let element_filters = pattern_element_filters(&data.pattern, unify_mask.len(), info);
 
         let antipatterns = parse_antipatterns(data.antipatterns, &data.unifications, info)?;
 
@@ -1698,6 +1749,7 @@ impl DisambiguationRule {
                 Some(Unification {
                     filters: unify_filters,
                     mask: unify_mask,
+                    element_filters,
                 })
             },
             filter,
