@@ -46,6 +46,7 @@ struct BuildFilePaths {
     multitoken_list_path: PathBuf,
     confusion_pairs_path: PathBuf,
     added_compound_path: PathBuf,
+    simple_replace_path: PathBuf,
 }
 
 impl BuildFilePaths {
@@ -68,6 +69,7 @@ impl BuildFilePaths {
             multitoken_list_path: p.join("filters/multitoken.txt"),
             confusion_pairs_path: p.join("filters/confusion_pairs.txt"),
             added_compound_path: p.join("filters/added_compound.txt"),
+            simple_replace_path: p.join("filters/replace.txt"),
         }
     }
 }
@@ -387,6 +389,44 @@ fn build_filter_data(
                 .push(parts[1].trim().to_lowercase());
         }
         data.added_compound = Some(map);
+    }
+
+    // SimpleReplaceRule phrase table (nl: rules/nl/replace.txt, 66k lines -
+    // too large to compile as per-entry grammar rules, loaded as a lookup
+    // table like LT's dictionary-backed rule)
+    if paths.simple_replace_path.exists() {
+        let text = fs::read_to_string(&paths.simple_replace_path).unwrap_or_default();
+        let mut table = crate::rule::filter_data::SimpleReplaceTable {
+            prefix: format!("{}_SIMPLE_REPLACE", lang_code.trim().to_uppercase()),
+            by_first_word: Default::default(),
+        };
+        let mut n = 0usize;
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim().to_string();
+            if line.is_empty() || !line.contains('=') {
+                continue;
+            }
+            let (wrong, correct) = line.split_once('=').unwrap();
+            let wrong = wrong.trim();
+            let corrects: Vec<String> = correct
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            if wrong.is_empty() || corrects.is_empty() {
+                continue;
+            }
+            if let Some(first) = wrong.split_whitespace().next() {
+                table
+                    .by_first_word
+                    .entry(first.to_string())
+                    .or_default()
+                    .push((wrong.to_string(), corrects));
+                n += 1;
+            }
+        }
+        info!("Loaded {} simple-replace phrases.", n);
+        data.simple_replace = Some(table);
     }
 
     data

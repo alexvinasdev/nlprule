@@ -117,10 +117,19 @@ fn clean_overlapping(suggestions: Vec<Suggestion>) -> Vec<Suggestion> {
             continue;
         }
 
-        // overlapping: equal priorities -> the longer match wins, then the
-        // later match wins
-        let cur_priority = cur_to - cur_from;
-        let prev_priority = prev_to - prev_from;
+        // overlapping: language priorities first (Dutch gives the
+        // SimpleReplaceRule family priority 1, so e.g. NL_SIMPLE_REPLACE_DUR
+        // beats a same-span DYSLEXIE warning like DEUR_DUR), then the longer
+        // match, then the later match
+        let priority_of = |sugg: &Suggestion| -> usize {
+            if sugg.source().starts_with("NL_SIMPLE_REPLACE_") {
+                1
+            } else {
+                0
+            }
+        };
+        let cur_priority = priority_of(&rule_match) + (cur_to - cur_from);
+        let prev_priority = priority_of(&prev) + (prev_to - prev_from);
         if cur_priority >= prev_priority {
             prev = rule_match;
             let span = prev.span().char().clone();
@@ -276,6 +285,47 @@ impl Rules {
                 break;
             }
         }
+        // SimpleReplaceRule phrase table (nl): case-sensitive multiword
+        // lookup with sub-rule ids derived from the wrong phrase
+        if let Some(table) = self.filter_data.simple_replace.as_ref() {
+            for (i, token) in tokens.iter().enumerate() {
+                let candidates = match table.by_first_word.get(token.word().as_str()) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                for (wrong, corrects) in candidates {
+                    let words: Vec<&str> = wrong.split_whitespace().collect();
+                    if words.len() > tokens.len() - i {
+                        continue;
+                    }
+                    let matches = words.iter().enumerate().all(|(k, w)| {
+                        tokens[i + k].word().as_str() == *w
+                            && (k == 0 || tokens[i + k].has_space_before())
+                    });
+                    if !matches {
+                        continue;
+                    }
+                    let span =
+                        Span::from_positions(tokens[i].span().start(), tokens[i + words.len() - 1].span().end());
+                    let sub_id = format!(
+                        "{}_{}",
+                        table.prefix,
+                        wrong
+                            .to_uppercase()
+                            .chars()
+                            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                            .collect::<String>()
+                    );
+                    out.push(Suggestion::new(
+                        sub_id,
+                        format!("Possible mistake: did you mean \"{}\"?", corrects[0]),
+                        span,
+                        corrects.clone(),
+                    ));
+                    break;
+                }
+            }
+        }
         out
     }
 
@@ -323,21 +373,28 @@ impl Rules {
         }
 
 
+        let n_pattern_rules = self.rules.len();
         output.sort_by(|(ia, a), (ib, b)| {
             a.span()
                 .char()
                 .start
                 .cmp(&b.span().char().start)
-                .then_with(|| ib.cmp(ia))
+                // LT inserts the text-level built-ins before the sentence
+                // rules' matches at the same position, and keeps insertion
+                // (grammar) order among pattern rules; CleanOverlapping then
+                // lets the LATER entry win an exactly equal span (nl keeps
+                // IETS_KLEINS over GEURIGS_GURIGS, a pattern match replaces
+                // a same-span built-in)
+                .then_with(|| (*ia >= n_pattern_rules).cmp(&(*ib >= n_pattern_rules)))
+                .then_with(|| ia.cmp(ib))
         });
 
         // Port of LT's CleanOverlappingFilter (the HTTP server always runs
         // with it): walk the position-sorted matches, drop overlapping ones -
-        // ties resolved by longer match, then by the later match - and the
-        // juxtaposed comma duplicate-suggestion cases. The list is already
-        // sorted by start; at equal starts the built-ins (appended last,
-        // sorted first) come first, so a pattern or speller match at the same
-        // span replaces them, like on the server.
+        // ties resolved by longer match, then by the later match in list
+        // order (LT appends the text-level built-ins after the sentence
+        // rules, so with an exactly equal span the later rule - or the
+        // built-in - wins, e.g. nl keeps IETS_KLEINS over GEURIGS_GURIGS).
         let suggestions: Vec<_> = output
             .into_iter()
             .map(|(_, suggestion)| {

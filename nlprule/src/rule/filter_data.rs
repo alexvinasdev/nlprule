@@ -270,4 +270,19 @@ pub struct FilterData {
     /// plain speller (LT does this for en/de/pt/nl).
     #[serde(default)]
     pub multitoken_speller_check: bool,
+    /// LT `AbstractSimpleReplaceRule2` table (`filters/replace.txt`):
+    /// phrase-level `wrong=correct` pairs, matched case-sensitively with
+    /// sub-rule ids derived from the wrong phrase (e.g.
+    /// `NL_SIMPLE_REPLACE_DUR`).
+    #[serde(default)]
+    pub simple_replace: Option<SimpleReplaceTable>,
+}
+
+/// Wrong phrases indexed by their first word, with the id prefix the
+/// language's SimpleReplaceRule uses (`NL_SIMPLE_REPLACE` for nl).
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct SimpleReplaceTable {
+    pub prefix: String,
+    /// first word of the wrong phrase -> [(wrong phrase, correct phrases)]
+    pub by_first_word: HashMap<String, Vec<(String, Vec<String>)>>,
 }
