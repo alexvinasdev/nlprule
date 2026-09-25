@@ -199,7 +199,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | fr   | 1000      | 58        | 75     | 0.90               | 0.88           | 0.93    |
 | pt   | 1000      | 62        | 83     | 0.90               | 0.87           | 0.91    |
 | ca   | 1000      | 66         | 91      | 0.89               | 0.85           | 0.90    |
-| ar   | 616       | 30           | 42      | 0.92               | 0.89           | 0.93    |
+| ar   | 616       | 28           | 40      | 0.93               | 0.90           | 0.93    |
 | en   | 1000      | 54         | 78      | 0.92               | 0.89           | 0.92    |
 | nl   | 1000      | 137        | 176     | 0.84               | 0.80           | 0.82    |
 
@@ -220,7 +220,7 @@ into:
 
 - `ar` (0.87/0.84): `ArabicTagger.additionalTags` prefix/suffix stemming is
   ported (definite article, clitics; +145 rules recovered, 1062 examples
-  pass), `HUNSPELL_RULE_AR` runs on the offline-expanded hunspell dictionary; overlap ties resolve in grammar order (the generic syntax_125 wins over specific rules), taking ar to 0.92/0.89
+  pass), `HUNSPELL_RULE_AR` runs on the offline-expanded hunspell dictionary; overlap ties resolve in grammar order (the generic syntax_125 wins over specific rules), taking ar to 0.93/0.90 (plus the SimpleReplaceRule table)
   (30.5M forms, validated 400/400 against the server's accept/reject). The
   residue is gender subrule-variant selection and `ArabicNumberPhraseFilter`
   (needs the ArabicNumbersWords number-to-words engine).
