@@ -317,9 +317,10 @@ impl Tokenizer {
                         .map(|(i, _)| i)
                         .unwrap_or(pretoken.len());
                     let (left, rest) = pretoken.split_at(apostrophe_idx);
-                    let rest_upper = rest[1..].chars().any(char::is_uppercase);
+                    let apos_len = rest.chars().next().map_or(1, char::len_utf8);
+                    let rest_upper = rest[apos_len..].chars().any(char::is_uppercase);
                     if !left.is_empty()
-                        && rest_upper
+                        && (rest_upper || rest[apos_len..].chars().count() > 1)
                         && self.tagger.id_word(left.into()).1.is_some()
                     {
                         // known left part + uppercase remainder (We'RE):

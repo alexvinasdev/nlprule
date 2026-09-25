@@ -46,10 +46,14 @@ impl Matcher {
         let matches = match &self.matcher {
             either::Left(string_or_idx) => match string_or_idx {
                 either::Left(string) => {
+                    // LT treats the typographic apostrophe like the ASCII
+                    // one when comparing token text ("were’re" ~ "were're")
+                    let norm = |s: &str| s.replace('\u{2019}', "'");
                     if case_sensitive {
-                        string.as_str() == input
+                        string.as_str() == input || norm(string.as_str()) == norm(input)
                     } else {
-                        UniCase::new(string) == UniCase::new(input)
+                        UniCase::new(string.as_str()) == UniCase::new(input)
+                            || UniCase::new(norm(string.as_str())) == UniCase::new(norm(input))
                     }
                 }
                 either::Right(id) => {
