@@ -10949,3 +10949,11 @@ Amyntas
 Amastan
 Noveroske
 phygital
+com
+org
+net
+edu
+io
+info
+biz
+www

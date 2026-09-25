@@ -472,6 +472,18 @@ pub(crate) fn morfologik_spelling(
         {
             continue;
         }
+        // English speller: words containing a dot (domain-like
+        // "wordpress.com") are ignored, and hyphenated words are checked
+        // part by part, flagging only an unknown part
+        if lang == "en" && word.contains('.') {
+            continue;
+        }
+        // English speller: hyphenated words are not checked as a whole
+        // (LT checks dictionary compounds; empirically even unknown parts
+        // like "well-xzyzing" are not flagged)
+        if lang == "en" && word.contains('-') {
+            continue;
+        }
         // a reading with a real part-of-speech (not the empty pseudo-reading
         // and not UNKNOWN) makes the word "tagged"
         if ignore_tagged
