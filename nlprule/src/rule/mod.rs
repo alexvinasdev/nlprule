@@ -19,6 +19,7 @@ pub(crate) mod engine;
 pub(crate) mod grammar;
 pub mod id;
 pub(crate) mod post_filter;
+pub(crate) mod priorities;
 pub mod synthesizer;
 
 use engine::Engine;

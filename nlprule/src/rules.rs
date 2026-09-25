@@ -54,7 +54,7 @@ pub struct Rules {
 /// Port of `CleanOverlappingFilter.filter` (LT 6.5). Priorities are all
 /// treated as equal (no language overrides priority in the languages we
 /// build; the `picky` tag only matters at picky level).
-fn clean_overlapping(suggestions: Vec<Suggestion>) -> Vec<Suggestion> {
+fn clean_overlapping(suggestions: Vec<Suggestion>, lang: Option<&str>) -> Vec<Suggestion> {
     let mut clean = Vec::new();
     let mut iter = suggestions.into_iter();
     let mut prev = match iter.next() {
@@ -117,19 +117,14 @@ fn clean_overlapping(suggestions: Vec<Suggestion>) -> Vec<Suggestion> {
             continue;
         }
 
-        // overlapping: language priorities first (Dutch gives the
-        // SimpleReplaceRule family priority 1, so e.g. NL_SIMPLE_REPLACE_DUR
-        // beats a same-span DYSLEXIE warning like DEUR_DUR), then the longer
-        // match, then the later match
-        let priority_of = |sugg: &Suggestion| -> usize {
-            if sugg.source().starts_with("NL_SIMPLE_REPLACE_") {
-                1
-            } else {
-                0
-            }
+        // overlapping: language priorities first (LT's getPriorityForId,
+        // e.g. Dutch's SimpleReplaceRule family or English's big id map),
+        // then the longer match, then the later match
+        let priority_of = |sugg: &Suggestion| -> isize {
+            crate::rule::priorities::priority_for_id(lang, sugg.source()) as isize
         };
-        let cur_priority = priority_of(&rule_match) + (cur_to - cur_from);
-        let prev_priority = priority_of(&prev) + (prev_to - prev_from);
+        let cur_priority = priority_of(&rule_match) + (cur_to - cur_from) as isize;
+        let prev_priority = priority_of(&prev) + (prev_to - prev_from) as isize;
         if cur_priority >= prev_priority {
             prev = rule_match;
             let span = prev.span().char().clone();
@@ -407,7 +402,7 @@ impl Rules {
             })
             .collect();
 
-        clean_overlapping(suggestions)
+        clean_overlapping(suggestions, self.builtin_lang.as_deref())
     }
 
     /// Compute the suggestions for a text by checking all rules.
