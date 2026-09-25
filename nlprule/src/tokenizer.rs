@@ -82,6 +82,11 @@ pub(crate) struct TokenizerLangOptions {
     /// article, e.g. "del" -> "de" + "l").
     #[serde(default)]
     pub split_contractions: Option<String>,
+    /// LT's English tokenizer splits a leading or trailing hyphen off an
+    /// unknown whitespace chunk ("seco- ndary" -> [seco][-][ndary]), while
+    /// intra-word hyphens stay part of the token ("well-suiting").
+    #[serde(default)]
+    pub split_edge_hyphens: bool,
 }
 
 impl Default for TokenizerLangOptions {
@@ -95,6 +100,7 @@ impl Default for TokenizerLangOptions {
             extra_join_regexes: Vec::new(),
             cjk_segmentation: None,
             split_contractions: None,
+            split_edge_hyphens: false,
         }
     }
 }
@@ -275,6 +281,20 @@ impl Tokenizer {
                 // if the token is in the dictionary, we add it right away
                 if self.tagger.id_word(pretoken.into()).1.is_some() {
                     tokens.push(pretoken);
+                } else if self.lang_options.split_edge_hyphens
+                    && pretoken.chars().count() > 2
+                    && (pretoken.starts_with('-') || pretoken.ends_with('-'))
+                {
+                    // LT's English tokenizer: an unknown chunk with an edge
+                    // hyphen gets the hyphen as its own token
+                    // ("seco- ndary" -> [seco][-][ndary])
+                    if let Some(stripped) = pretoken.strip_suffix('-') {
+                        tokens.push(stripped);
+                        tokens.push(&pretoken[pretoken.len() - 1..]);
+                    } else if let Some(stripped) = pretoken.strip_prefix('-') {
+                        tokens.push(&pretoken[..1]);
+                        tokens.push(stripped);
+                    }
                 } else {
                     // otherwise, potentially split it again with `extra_split_chars` e. g. "-"
                     tokens.extend(split(pretoken, |c| {

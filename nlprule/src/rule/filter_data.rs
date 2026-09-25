@@ -280,9 +280,15 @@ pub struct FilterData {
 
 /// Wrong phrases indexed by their first word, with the id prefix the
 /// language's SimpleReplaceRule uses (`NL_SIMPLE_REPLACE` for nl).
+fn default_true() -> bool { true }
+
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SimpleReplaceTable {
     pub prefix: String,
+    /// Whether sub-rule ids get the wrong-phrase suffix (nl's
+    /// AbstractSimpleReplaceRule2 does, en's older one does not)
+    #[serde(default = "default_true")]
+    pub sub_ids: bool,
     /// first word of the wrong phrase -> [(wrong phrase, correct phrases)]
     pub by_first_word: HashMap<String, Vec<(String, Vec<String>)>>,
 }

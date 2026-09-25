@@ -391,6 +391,40 @@ fn build_filter_data(
         data.added_compound = Some(map);
     }
 
+    // English contractions (ContractionSpellingRule, an older
+    // AbstractSimpleReplaceRule without sub-rule ids, case-sensitive)
+    let contractions_path = paths.simple_replace_path.parent().unwrap().join("contractions.txt");
+    if lang_code.trim() == "en" && contractions_path.exists() {
+        let text = fs::read_to_string(&contractions_path).unwrap_or_default();
+        let mut table = crate::rule::filter_data::SimpleReplaceTable {
+            prefix: "EN_CONTRACTION_SPELLING".to_string(),
+            sub_ids: false,
+            by_first_word: Default::default(),
+        };
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim().to_string();
+            if line.is_empty() || !line.contains('=') {
+                continue;
+            }
+            let (wrong, correct) = line.split_once('=').unwrap();
+            let wrong = wrong.trim();
+            let corrects: Vec<String> = correct
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            if wrong.is_empty() || corrects.is_empty() {
+                continue;
+            }
+            table
+                .by_first_word
+                .entry(wrong.to_string())
+                .or_default()
+                .push((wrong.to_string(), corrects));
+        }
+        data.simple_replace = Some(table);
+    }
+
     // SimpleReplaceRule phrase table (nl: rules/nl/replace.txt, 66k lines -
     // too large to compile as per-entry grammar rules, loaded as a lookup
     // table like LT's dictionary-backed rule)
@@ -398,6 +432,7 @@ fn build_filter_data(
         let text = fs::read_to_string(&paths.simple_replace_path).unwrap_or_default();
         let mut table = crate::rule::filter_data::SimpleReplaceTable {
             prefix: format!("{}_SIMPLE_REPLACE", lang_code.trim().to_uppercase()),
+            sub_ids: true,
             by_first_word: Default::default(),
         };
         let mut n = 0usize;

@@ -233,6 +233,51 @@ impl Rules {
             ctx,
         ));
         let tokens: Vec<_> = sentence.iter().collect();
+        // SimpleReplaceRule phrase table (nl): case-sensitive multiword
+        // lookup with sub-rule ids derived from the wrong phrase
+        if let Some(table) = self.filter_data.simple_replace.as_ref() {
+            for (i, token) in tokens.iter().enumerate() {
+                let candidates = match table.by_first_word.get(token.word().as_str()) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                for (wrong, corrects) in candidates {
+                    let words: Vec<&str> = wrong.split_whitespace().collect();
+                    if words.len() > tokens.len() - i {
+                        continue;
+                    }
+                    let matches = words.iter().enumerate().all(|(k, w)| {
+                        tokens[i + k].word().as_str() == *w
+                            && (k == 0 || tokens[i + k].has_space_before())
+                    });
+                    if !matches {
+                        continue;
+                    }
+                    let span =
+                        Span::from_positions(tokens[i].span().start(), tokens[i + words.len() - 1].span().end());
+                    let sub_id = if table.sub_ids {
+                        format!(
+                            "{}_{}",
+                            table.prefix,
+                            wrong
+                                .to_uppercase()
+                                .chars()
+                                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                                .collect::<String>()
+                        )
+                    } else {
+                        table.prefix.clone()
+                    };
+                    out.push(Suggestion::new(
+                        sub_id,
+                        format!("Possible mistake: did you mean \"{}\"?", corrects[0]),
+                        span,
+                        corrects.clone(),
+                    ));
+                    break;
+                }
+            }
+        }
         if tokens.len() < 2 {
             return out;
         }
@@ -283,47 +328,6 @@ impl Rules {
                     vec![ta.to_string()],
                 ));
                 break;
-            }
-        }
-        // SimpleReplaceRule phrase table (nl): case-sensitive multiword
-        // lookup with sub-rule ids derived from the wrong phrase
-        if let Some(table) = self.filter_data.simple_replace.as_ref() {
-            for (i, token) in tokens.iter().enumerate() {
-                let candidates = match table.by_first_word.get(token.word().as_str()) {
-                    Some(c) => c,
-                    None => continue,
-                };
-                for (wrong, corrects) in candidates {
-                    let words: Vec<&str> = wrong.split_whitespace().collect();
-                    if words.len() > tokens.len() - i {
-                        continue;
-                    }
-                    let matches = words.iter().enumerate().all(|(k, w)| {
-                        tokens[i + k].word().as_str() == *w
-                            && (k == 0 || tokens[i + k].has_space_before())
-                    });
-                    if !matches {
-                        continue;
-                    }
-                    let span =
-                        Span::from_positions(tokens[i].span().start(), tokens[i + words.len() - 1].span().end());
-                    let sub_id = format!(
-                        "{}_{}",
-                        table.prefix,
-                        wrong
-                            .to_uppercase()
-                            .chars()
-                            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                            .collect::<String>()
-                    );
-                    out.push(Suggestion::new(
-                        sub_id,
-                        format!("Possible mistake: did you mean \"{}\"?", corrects[0]),
-                        span,
-                        corrects.clone(),
-                    ));
-                    break;
-                }
             }
         }
         out
