@@ -200,7 +200,7 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | pt   | 1000      | 62        | 83     | 0.90               | 0.87           | 0.91    |
 | ca   | 1000      | 66         | 91      | 0.89               | 0.85           | 0.90    |
 | ar   | 616       | 51           | 63      | 0.87               | 0.84           | 0.89    |
-| en   | 1000      | 87         | 100     | 0.87               | 0.85           | 0.90    |
+| en   | 1000      | 79         | 96      | 0.88               | 0.86           | 0.90    |
 | nl   | 1000      | 147        | 186     | 0.83               | 0.79           | 0.81    |
 
 This includes the Java-only built-in rules that have no XML representation,
@@ -241,7 +241,7 @@ into:
   (the antipattern-unification bug is fixed); the residue is tagger
   reading differences and the rules still dropped for parallel-token
   control flow.
-- `en` (0.87/0.85, picky rules off like the server's default level): the OpenNLP chunker is ported and loaded from
+- `en` (0.88/0.86, picky rules off like the server's default level): the OpenNLP chunker is ported and loaded from
   `chunker.json` (chunks like `B-NP-singular`/`I-NP`/`E-NP`/`B-VP` verified);
   the residue is speller-backed rules (`EN_CONTRACTION_SPELLING`,
   `EN_SPLIT_WORDS_HYPHEN`) and `MORFOLOGIK_RULE_EN_US` over-firing.
