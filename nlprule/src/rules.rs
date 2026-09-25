@@ -373,7 +373,7 @@ impl Rules {
 
 
         let n_pattern_rules = self.rules.len();
-        let en_mode = self.builtin_lang.as_deref() == Some("en");
+        let en_mode = matches!(self.builtin_lang.as_deref(), Some("en") | Some("ar"));
         output.sort_by(|(ia, a), (ib, b)| {
             a.span()
                 .char()
