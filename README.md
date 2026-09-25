@@ -257,10 +257,10 @@ into:
   same-span tie (LT's insertion order there differs from the
   reverse-grammar order that matches fr/de/ca/en/es) and tagger
   reading differences.
-- `de`'s speller (`MORFOLOGIK_RULE_DE_DE`) is disabled: `GermanSpellerRule`
-  decomposes compounds before lookup and without that port every
-  non-listed compound would over-fire. `pl`'s stemmer-based rules and the
-  other Java-only rule classes listed below.
+- `de`'s speller: the server does not run it either (its `GermanSpellerRule`
+  needs the ngram language model; without it "Glük"/"Fehller"/"nromale"
+  are not flagged), so disabling it on our side is parity, not a gap.
+  `pl`'s stemmer-based rules and the other Java-only rule classes below.
 
 Language-specific notes:
 - `ja` uses lindera with the ipadic dictionary (the same dictionary data LT uses
@@ -314,7 +314,6 @@ Language-specific notes:
   frequency list of the 20k most common English words)
 - Still unported: ar ArabicNumberPhraseFilter (needs ArabicNumbersWords) and
   `HUNSPELL_RULE_AR` (hunspell affix expansion of `ar.dic`), de's
-  `MORFOLOGIK_RULE_DE_DE` (needs GermanSpellerRule's compound decomposition),
   ca CatalanNumberSpellerFilter (needs the Catalan number speller) and
   ca's `FindSuggestionsEsFilter` variant,
   pt BrazilianToponymFilter (LT `<regexp>` rules are a separate rule type),
