@@ -432,7 +432,9 @@ fn build_filter_data(
         let text = fs::read_to_string(&paths.simple_replace_path).unwrap_or_default();
         let mut table = crate::rule::filter_data::SimpleReplaceTable {
             prefix: format!("{}_SIMPLE_REPLACE", lang_code.trim().to_uppercase()),
-            sub_ids: true,
+            // only Dutch's AbstractSimpleReplaceRule2 assigns per-entry
+            // sub-rule ids; ar's older rule reports the plain id
+            sub_ids: lang_code.trim() == "nl",
             by_first_word: Default::default(),
         };
         let mut n = 0usize;
