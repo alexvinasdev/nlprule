@@ -373,20 +373,17 @@ impl Rules {
         }
 
 
-        let n_pattern_rules = self.rules.len();
         output.sort_by(|(ia, a), (ib, b)| {
             a.span()
                 .char()
                 .start
                 .cmp(&b.span().char().start)
-                // LT inserts the text-level built-ins before the sentence
-                // rules' matches at the same position, and keeps insertion
-                // (grammar) order among pattern rules; CleanOverlapping then
-                // lets the LATER entry win an exactly equal span (nl keeps
-                // IETS_KLEINS over GEURIGS_GURIGS, a pattern match replaces
-                // a same-span built-in)
-                .then_with(|| (*ia >= n_pattern_rules).cmp(&(*ib >= n_pattern_rules)))
-                .then_with(|| ia.cmp(ib))
+                // at equal starts the built-ins (appended last, sorted
+                // first) come first, so a pattern or speller match at the
+                // same span replaces them; among pattern rules the
+                // later-in-grammar match sorts first and survives the
+                // overlap walk (matches the server on fr/de/ca/en/es)
+                .then_with(|| ib.cmp(ia))
         });
 
         // Port of LT's CleanOverlappingFilter (the HTTP server always runs
