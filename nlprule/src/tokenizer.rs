@@ -87,6 +87,13 @@ pub(crate) struct TokenizerLangOptions {
     /// intra-word hyphens stay part of the token ("well-suiting").
     #[serde(default)]
     pub split_edge_hyphens: bool,
+    /// LT's English tokenizer on an unknown chunk containing an apostrophe:
+    /// if the part before the first apostrophe is a known word, the
+    /// apostrophe is glued to the remainder ("We'RE" -> [We]['RE]);
+    /// otherwise the chunk splits into [left][apos][right]
+    /// ("didnt't" -> [didnt]['][t]).
+    #[serde(default)]
+    pub apostrophe_glue_after_known: bool,
 }
 
 impl Default for TokenizerLangOptions {
@@ -101,6 +108,7 @@ impl Default for TokenizerLangOptions {
             cjk_segmentation: None,
             split_contractions: None,
             split_edge_hyphens: false,
+            apostrophe_glue_after_known: false,
         }
     }
 }
@@ -274,7 +282,12 @@ impl Tokenizer {
     ) -> impl ExactSizeIterator<Item = Range<usize>> + 't {
         let mut tokens = Vec::new();
 
-        let split_char = |c: char| c.is_whitespace() || crate::utils::splitting_chars().contains(c);
+        let glue_mode = self.lang_options.apostrophe_glue_after_known;
+        let split_char = |c: char| {
+            c.is_whitespace()
+                || (crate::utils::splitting_chars().contains(c)
+                    && !(glue_mode && (c == '\'' || c == '\u{2019}')))
+        };
         let split_text = |text: &'t str| {
             let mut tokens = Vec::new();
             for pretoken in split(text, split_char) {
@@ -294,6 +307,36 @@ impl Tokenizer {
                     } else if let Some(stripped) = pretoken.strip_prefix('-') {
                         tokens.push(&pretoken[..1]);
                         tokens.push(stripped);
+                    }
+                } else if self.lang_options.apostrophe_glue_after_known
+                    && pretoken.chars().any(|c| c == '\'' || c == '\u{2019}')
+                {
+                    let apostrophe_idx = pretoken
+                        .char_indices()
+                        .find(|(_, c)| *c == '\'' || *c == '\u{2019}')
+                        .map(|(i, _)| i)
+                        .unwrap_or(pretoken.len());
+                    let (left, rest) = pretoken.split_at(apostrophe_idx);
+                    if !left.is_empty() && self.tagger.id_word(left.into()).1.is_some() {
+                        // known left part: glue the apostrophe to the rest
+                        tokens.push(left);
+                        tokens.push(rest);
+                    } else {
+                        // unknown left part: split at every apostrophe,
+                        // keeping each apostrophe as its own token
+                        let mut start = 0usize;
+                        for (i, c) in pretoken.char_indices() {
+                            if c == '\'' || c == '\u{2019}' {
+                                if i > start {
+                                    tokens.push(&pretoken[start..i]);
+                                }
+                                tokens.push(&pretoken[i..i + c.len_utf8()]);
+                                start = i + c.len_utf8();
+                            }
+                        }
+                        if start < pretoken.len() {
+                            tokens.push(&pretoken[start..]);
+                        }
                     }
                 } else {
                     // otherwise, potentially split it again with `extra_split_chars` e. g. "-"

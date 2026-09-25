@@ -478,6 +478,11 @@ pub(crate) fn morfologik_spelling(
         if lang == "en" && word.contains('.') {
             continue;
         }
+        // en: tokens containing an apostrophe (contractions like "don't",
+        // suffix tokens like 'RE, quoted 'word) are not spelling-checked
+        if lang == "en" && (word.contains('\'') || word.contains('\u{2019}')) {
+            continue;
+        }
         // English speller: hyphenated words are not checked as a whole
         // (LT checks dictionary compounds; empirically even unknown parts
         // like "well-xzyzing" are not flagged)
