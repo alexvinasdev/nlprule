@@ -372,6 +372,8 @@ impl Rules {
         }
 
 
+        let n_pattern_rules = self.rules.len();
+        let en_mode = self.builtin_lang.as_deref() == Some("en");
         output.sort_by(|(ia, a), (ib, b)| {
             a.span()
                 .char()
@@ -381,8 +383,19 @@ impl Rules {
                 // first) come first, so a pattern or speller match at the
                 // same span replaces them; among pattern rules the
                 // later-in-grammar match sorts first and survives the
-                // overlap walk (matches the server on fr/de/ca/en/es)
-                .then_with(|| ib.cmp(ia))
+                // overlap walk (matches the server on fr/de/ca/es). For
+                // English the grammar order is kept so the later rule wins
+                // an equal-span tie (APOSTROPHE_UPPERCASE_LETTER over
+                // APOS_RE), which the priority map does not separate.
+                .then_with(|| {
+                    if en_mode {
+                        (*ia >= n_pattern_rules)
+                            .cmp(&(*ib >= n_pattern_rules))
+                            .then_with(|| ia.cmp(ib))
+                    } else {
+                        ib.cmp(ia)
+                    }
+                })
         });
 
         // Port of LT's CleanOverlappingFilter (the HTTP server always runs
