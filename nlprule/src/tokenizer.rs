@@ -317,8 +317,13 @@ impl Tokenizer {
                         .map(|(i, _)| i)
                         .unwrap_or(pretoken.len());
                     let (left, rest) = pretoken.split_at(apostrophe_idx);
-                    if !left.is_empty() && self.tagger.id_word(left.into()).1.is_some() {
-                        // known left part: glue the apostrophe to the rest
+                    let rest_upper = rest[1..].chars().any(char::is_uppercase);
+                    if !left.is_empty()
+                        && rest_upper
+                        && self.tagger.id_word(left.into()).1.is_some()
+                    {
+                        // known left part + uppercase remainder (We'RE):
+                        // glue the apostrophe to the rest, like LT
                         tokens.push(left);
                         tokens.push(rest);
                     } else {
