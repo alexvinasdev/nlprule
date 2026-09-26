@@ -159,7 +159,7 @@ tagger dictionaries in the LT distribution itself.
 | be             | 516        | 506       | ml     | 18         | 18        |
 | br | 665 | 476       | nl†    | 68331      | 68208     |
 | ca | 14545 | 10877 | pl | 1842 | 1491      |
-| crh            | 93         | 17        | pt | 1978 | 956 |
+| crh | 93 | 41        | pt | 1978 | 956 |
 | da             | 78         | 61        | ro     | 1167       | 1116      |
 | de | 5480 | 5193 | ru | 1180 | 988 |
 | de-DE-x-simple | 92         | 40        | sk     | 206        | 184       |
