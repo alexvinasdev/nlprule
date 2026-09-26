@@ -776,6 +776,7 @@ mod composition {
                 Atom::OrAtom(x) => Box::new(x.atoms.iter_mut()),
                 Atom::NotAtom(x) => x.atom.iter_mut(),
                 Atom::OffsetAtom(x) => x.atom.iter_mut(),
+                Atom::SentEndAtom(_) => Box::new(std::iter::once(self)),
             }
         }
 

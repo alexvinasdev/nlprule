@@ -2,6 +2,7 @@
     "use_compound_split_heuristic": false,
     "always_add_lower_tags": true,
     "extra_tags": [
+        "SENT_END",
         "\u305d\u306e\u4ed6",
         "\u30d5\u30a3\u30e9\u30fc",
         "\u526f\u8a5e",

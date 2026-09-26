@@ -214,7 +214,10 @@ mod regex {
                     Ast::Class(Class::Bracketed(bracketed))
                 }
                 Class::Perl(perl) => {
-                    if matches!(perl.kind, ClassPerlKind::Space) {
+                    // \s is rewritten to a literal space; \S (negated) must
+                    // keep its class semantics — it previously collapsed to
+                    // ' ' too, silently breaking patterns like `(.*\S)(-)`
+                    if matches!(perl.kind, ClassPerlKind::Space) && !perl.negated {
                         Ast::Literal(Literal {
                             span: zero_span(),
                             kind: LiteralKind::Verbatim,
@@ -440,6 +443,25 @@ mod regex {
                 from_java_regex(r"(?i)(?<=x)(?-i)s", false, false).unwrap(),
                 r"(?<=[xX])s"
             )
+        }
+
+
+        #[test]
+        fn sk_spojovnik_regexes() {
+            for pat in [r"(.*\S)(-)", r".*\S", r".*\p{L}"] {
+                let conv = from_java_regex(pat, true, true);
+                assert!(conv.is_ok(), "conversion failed for {:?}", pat);
+                let conv = conv.unwrap();
+                let re = crate::utils::regex::Regex::new(conv);
+                assert!(re.try_compile().is_ok(), "compile failed for {:?}", pat);
+                let subject = if pat.contains(r"\p{L}") { "test" } else { "test-" };
+                assert!(re.is_match(subject), "no match on '{:?}' for {:?}", subject, pat);
+            }
+            // \s still rewrites to a literal space (LT semantics)
+            assert_eq!(
+                from_java_regex(r".*\s", true, true).unwrap(),
+                "^(?:.* )$"
+            );
         }
 
         #[test]

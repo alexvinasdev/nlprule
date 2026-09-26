@@ -13,13 +13,19 @@ struct Opts {
     rules: String,
     #[clap(long, short)]
     ids: Vec<String>,
+    /// Language code (enables language-specific tokenizer modes, e.g. Breton apostrophes)
+    #[clap(long)]
+    lang: Option<String>,
 }
 
 fn main() {
     env_logger::init();
     let opts = Opts::parse();
 
-    let tokenizer = Tokenizer::new(opts.tokenizer).unwrap();
+    let mut tokenizer = Tokenizer::new(opts.tokenizer).unwrap();
+    if opts.lang.as_deref() == Some("br") {
+        tokenizer.set_breton_apostrophes(true);
+    }
     let rules_container = Rules::new(opts.rules).unwrap();
     let rules = rules_container.rules();
 

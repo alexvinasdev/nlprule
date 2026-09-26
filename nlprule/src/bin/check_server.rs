@@ -8,9 +8,13 @@ use std::io::{self, BufRead, Write};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let tokenizer = Tokenizer::new(&args[1]).unwrap();
+    let mut tokenizer = Tokenizer::new(&args[1]).unwrap();
     // optional third argument: the language code, enables the language
-    // specific behavior of the built-in Java-only rules
+    // specific behavior of the built-in Java-only rules and the
+    // language-specific tokenizer modes (Breton apostrophes)
+    if args.get(3).map_or(false, |l| l == "br") {
+        tokenizer.set_breton_apostrophes(true);
+    }
     let rules = match args.get(3) {
         Some(lang) => Rules::with_lang(&args[2], lang).unwrap(),
         None => Rules::new(&args[2]).unwrap(),

@@ -181,6 +181,7 @@ pub enum Atom {
     OrAtom,
     NotAtom,
     OffsetAtom,
+    SentEndAtom,
 }
 
 pub mod concrete {
@@ -293,6 +294,24 @@ pub struct NotAtom {
 impl Atomable for NotAtom {
     fn is_match(&self, context: Context, position: usize) -> bool {
         !self.atom.is_match(context, position)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SentEndAtom {}
+
+impl Atomable for SentEndAtom {
+    fn is_match(&self, context: Context, position: usize) -> bool {
+        // the merged synthetic end tag: the last real token of a sentence
+        // that does not end with terminal punctuation carries a SENT_END
+        // reading (LT adds it via AnalyzedTokenReadings.setSentEnd)
+        let (sentence, _) = context;
+        sentence
+            .index(position)
+            .word()
+            .tags()
+            .iter()
+            .any(|t| t.pos().as_str() == "SENT_END")
     }
 }
 

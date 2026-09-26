@@ -81,7 +81,9 @@ def main():
             "extra_join_regexes": [URL_JOIN_REGEX],
         }
         # preserve settings not derived here (e.g. cjk_segmentation)
-        for key in ("cjk_segmentation", "extra_split_chars"):
+        for key in ("cjk_segmentation", "extra_split_chars", "split_contractions",
+                        "breton_apostrophes", "apostrophe_glue_after_known",
+                        "split_edge_hyphens"):
             if key in existing_tok:
                 tokenizer_cfg[key] = existing_tok[key]
         (out / "tokenizer.json").write_text(json.dumps(tokenizer_cfg, indent=4) + "\n")

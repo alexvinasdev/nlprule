@@ -94,6 +94,14 @@ pub(crate) struct TokenizerLangOptions {
     /// ("didnt't" -> [didnt]['][t]).
     #[serde(default)]
     pub apostrophe_glue_after_known: bool,
+    /// LT's Breton tokenizer: "c'h" is a letter (trigraph) and never split;
+    /// any other apostrophe is glued to the preceding letter and the word
+    /// splits after it ("n'eo" -> ["n'"][eo], "c'havotenn" -> one token).
+    /// NOT serialized (bincode has no field versioning; a serialized field
+    /// would break every older tokenizer binary) — binaries enable it from
+    /// the language code via `Tokenizer::set_breton_apostrophes`.
+    #[serde(skip)]
+    pub breton_apostrophes: bool,
 }
 
 impl Default for TokenizerLangOptions {
@@ -109,6 +117,7 @@ impl Default for TokenizerLangOptions {
             split_contractions: None,
             split_edge_hyphens: false,
             apostrophe_glue_after_known: false,
+            breton_apostrophes: false,
         }
     }
 }
@@ -203,6 +212,13 @@ impl Tokenizer {
         Ok(bincode::deserialize_from(reader)?)
     }
 
+    /// Enable LT BretonWordTokenizer apostrophe handling for this tokenizer.
+    /// The flag is not serialized with the binary; callers that know the
+    /// language (check_server, test) set it explicitly.
+    pub fn set_breton_apostrophes(&mut self, enabled: bool) {
+        self.lang_options.breton_apostrophes = enabled;
+    }
+
     /// Serializes this rules set to a writer.
     pub fn to_writer<W: Write>(&self, writer: W) -> Result<(), Error> {
         Ok(bincode::serialize_into(writer, &self)?)
@@ -282,11 +298,15 @@ impl Tokenizer {
     ) -> impl ExactSizeIterator<Item = Range<usize>> + 't {
         let mut tokens = Vec::new();
 
+        const APOS_CHARS: [char; 4] = ['\'', '\u{2019}', '\u{2018}', '\u{02BC}'];
+
         let glue_mode = self.lang_options.apostrophe_glue_after_known;
+        let br_mode = self.lang_options.breton_apostrophes;
         let split_char = |c: char| {
             c.is_whitespace()
                 || (crate::utils::splitting_chars().contains(c)
-                    && !(glue_mode && (c == '\'' || c == '\u{2019}')))
+                    && !(glue_mode && (c == '\'' || c == '\u{2019}'))
+                    && !(br_mode && APOS_CHARS.contains(&c)))
         };
         let split_text = |text: &'t str| {
             let mut tokens = Vec::new();
@@ -307,6 +327,34 @@ impl Tokenizer {
                     } else if let Some(stripped) = pretoken.strip_prefix('-') {
                         tokens.push(&pretoken[..1]);
                         tokens.push(stripped);
+                    }
+                } else if self.lang_options.breton_apostrophes
+                    && pretoken.chars().any(|c| APOS_CHARS.contains(&c))
+                {
+                    // LT BretonWordTokenizer: "c'h" (any apostrophe variant
+                    // between c/C and h/H) is a letter of the word; any other
+                    // apostrophe is glued to the preceding letter and the word
+                    // splits right after it ("n'eo" -> [n'][eo],
+                    // "c'havotenn" -> one token)
+                    let chars: Vec<char> = pretoken.chars().collect();
+                    let mut start = 0usize;
+                    let mut byte_i = 0usize;
+                    for (idx, &c) in chars.iter().enumerate() {
+                        if APOS_CHARS.contains(&c) {
+                            let is_ch = idx > 0
+                                && idx + 1 < chars.len()
+                                && matches!(chars[idx - 1], 'c' | 'C')
+                                && matches!(chars[idx + 1], 'h' | 'H');
+                            let apos_end = byte_i + c.len_utf8();
+                            if !is_ch && apos_end > start {
+                                tokens.push(&pretoken[start..apos_end]);
+                                start = apos_end;
+                            }
+                        }
+                        byte_i += c.len_utf8();
+                    }
+                    if start < pretoken.len() {
+                        tokens.push(&pretoken[start..]);
                     }
                 } else if self.lang_options.apostrophe_glue_after_known
                     && pretoken.chars().any(|c| c == '\'' || c == '\u{2019}')
@@ -397,6 +445,13 @@ impl Tokenizer {
                 }
                 tokens = segmented;
             }
+
+            // LT's km tokenizer emits \u200b as its own token, but LT pattern
+            // matching runs over getTokensWithoutWhitespace which drops it —
+            // ZWSP is a word boundary, not a word. Drop ZWSP-only tokens so
+            // patterns match across the boundary while the preceding char
+            // stays non-whitespace ("no space before" semantics preserved).
+            tokens.retain(|t| !t.chars().all(|c| c == '\u{200b}'));
 
             tokens
         };

@@ -301,6 +301,18 @@ fn get_exceptions(
                     atom = OffsetAtom::new(atom, offset).into();
                 }
 
+                // LT: an exception whose postag lists SENT_END as an
+                // alternative (e.g. `[^M]*M:.*|SENT_END`) is the idiom to
+                // stop the token from matching the last real word of a
+                // sentence without terminal punctuation - the token that
+                // carries the merged SENT_END reading.
+                if x.postag
+                    .as_ref()
+                    .map_or(false, |p| p.split('|').any(|alt| alt.trim() == "SENT_END"))
+                {
+                    atom = OrAtom::or(vec![atom, SentEndAtom::default().into()]);
+                }
+
                 if !only_shifted || (offset != 0) {
                     Some(Ok(atom))
                 } else {
