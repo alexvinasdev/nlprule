@@ -212,7 +212,7 @@ spelling rules on the exact morfologik dictionaries the server uses
 dictionaries were dumped from the LT distro jars with morfologik's own
 tools), the `immunize`/`ignore_spelling` disambiguation actions, and LT's
 `CleanOverlappingFilter` (the server always drops overlapping matches —
-longer match wins, then the later match).
+language priority first, then the longer match, then the later match).
 
 `build/gap_analysis.py` aggregates which rule IDs the server fires but
 nlprule does not (400 sentences per language); the remaining gap decomposes
@@ -257,6 +257,14 @@ into:
   same-span tie (LT's insertion order there differs from the
   reverse-grammar order that matches fr/de/ca/en/es) and tagger
   reading differences.
+- `pl` (0.78/0.71): the overlap filter now applies LT's priority map
+  (`ZDANIA_ZLOZONE` = -1, `Polish.getPriorityForId`) before the
+  longer-match tiebreak, so the whole-sentence `ZDANIA_ZLOZONE` no
+  longer swallows `UPPERCASE_SENTENCE_START` at the sentence start
+  (0.7595/0.6926 → 0.7769/0.7085). Residue: `COFANIE_PRZECINKA`,
+  `BRAK_PRZECINKA_ZE`/`ZEBY` comma rules (LT's tagger readings), the
+  speller (`MORFOLOGIK_RULE_PL_PL` on dictionary dump differences) and
+  `DWUZNACZNOSC_W_COFANIU` fragments.
 - `de`'s speller: the server does not run it either (its `GermanSpellerRule`
   needs the ngram language model; without it "Glük"/"Fehller"/"nromale"
   are not flagged), so disabling it on our side is parity, not a gap.
