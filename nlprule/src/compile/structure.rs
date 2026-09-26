@@ -745,8 +745,21 @@ type DisambiguationRuleReading = (DisambiguationRule, Option<Group>, Option<Cate
 
 pub fn read_rules<P: AsRef<std::path::Path>>(
     path: P,
-) -> Vec<Result<GrammarRuleReading, serde_xml_rs::Error>> {
+) -> (
+    Vec<Result<GrammarRuleReading, serde_xml_rs::Error>>,
+    Vec<crate::rule::regex_rule::RegexRuleDef>,
+) {
     let file = File::open(path.as_ref()).unwrap();
+    let mut raw_xml = String::new();
+    {
+        use std::io::Read;
+        File::open(path.as_ref())
+            .unwrap()
+            .read_to_string(&mut raw_xml)
+            .unwrap();
+    }
+    let regex_defs = extract_regex_rule_defs(&raw_xml);
+
     let file = BufReader::new(file);
 
     let sanitized = preprocess::sanitize(file, &["suggestion"]);
@@ -792,17 +805,20 @@ pub fn read_rules<P: AsRef<std::path::Path>>(
         .flatten()
         .collect();
 
-    rules
-        .into_iter()
-        .map(|result| match result {
-            Ok(mut x) => {
-                x.0.unifications = Some(unifications.clone());
+    (
+        rules
+            .into_iter()
+            .map(|result| match result {
+                Ok(mut x) => {
+                    x.0.unifications = Some(unifications.clone());
 
-                Ok(x)
-            }
-            Err(x) => Err(x),
-        })
-        .collect()
+                    Ok(x)
+                }
+                Err(x) => Err(x),
+            })
+            .collect(),
+        regex_defs,
+    )
 }
 
 pub fn read_disambiguation_rules<P: AsRef<std::path::Path>>(
@@ -912,4 +928,252 @@ mod read_rules_tests {
         eprintln!("NOM_AGREEMENT subrules parsed: {}", n);
         assert!(n >= 5, "expected 5 subrules, got {}", n);
     }
+}
+
+/// Extract rule-level `<regexp>` rules (LT regex-on-text rules, e.g. de
+/// `GENANT_SPELLING_RULE`, gl `UNITS_OF_MEASURE_SPACING`) from the RAW
+/// grammar XML. Text nodes in the sanitized/re-indented chunks are polluted
+/// with indentation whitespace, so this reads the original file. The
+/// pattern pipeline is left untouched: its chunks still contain the
+/// `<regexp>` children, which fail structure deserialization there exactly
+/// as before (they are skipped with a counted warning).
+pub fn extract_regex_rule_defs(raw_xml: &str) -> Vec<crate::rule::regex_rule::RegexRuleDef> {
+    use crate::rule::regex_rule::{RegexRuleDef, RegexSugPart, ReplacePart};
+    use crate::utils::regex::Regex;
+
+    let doc = match roxmltree::Document::parse(raw_xml) {
+        Ok(doc) => doc,
+        Err(_) => return Vec::new(),
+    };
+
+    // split a literal with \N regex-group backrefs into parts
+    fn lit_with_backrefs(s: &str) -> Vec<RegexSugPart> {
+        let mut parts = Vec::new();
+        let mut lit = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(&d) = chars.peek() {
+                    if d.is_ascii_digit() {
+                        chars.next();
+                        if !lit.is_empty() {
+                            parts.push(RegexSugPart::Lit(std::mem::take(&mut lit)));
+                        }
+                        parts.push(RegexSugPart::Group(d.to_digit(10).unwrap() as usize));
+                        continue;
+                    }
+                }
+            }
+            lit.push(c);
+        }
+        if !lit.is_empty() {
+            parts.push(RegexSugPart::Lit(lit));
+        }
+        parts
+    }
+
+    // `$k` replacement string -> parts
+    fn replace_parts(s: &str) -> Vec<ReplacePart> {
+        let mut parts = Vec::new();
+        let mut lit = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '$' {
+                if let Some(&d) = chars.peek() {
+                    if d.is_ascii_digit() {
+                        chars.next();
+                        let mut n = d.to_digit(10).unwrap() as usize;
+                        while n < 10 {
+                            match chars.peek() {
+                                Some(&d2) if d2.is_ascii_digit() => {
+                                    n = n * 10 + d2.to_digit(10).unwrap() as usize;
+                                    chars.next();
+                                }
+                                _ => break,
+                            }
+                        }
+                        if !lit.is_empty() {
+                            parts.push(ReplacePart::Lit(std::mem::take(&mut lit)));
+                        }
+                        parts.push(ReplacePart::Ref(n));
+                        continue;
+                    }
+                }
+            }
+            lit.push(c);
+        }
+        if !lit.is_empty() {
+            parts.push(ReplacePart::Lit(lit));
+        }
+        parts
+    }
+
+    fn default_on(node: roxmltree::Node) -> bool {
+        match node.attribute("default") {
+            Some("on") | None => true,
+            Some("off") | Some("temp_off") => false,
+            // unknown values: treat as on, never panic the build
+            Some(_) => true,
+        }
+    }
+
+    fn has_picky(node: roxmltree::Node) -> bool {
+        node.attribute("tags")
+            .map(|x| x.split_whitespace().any(|t| t == "picky"))
+            .unwrap_or(false)
+    }
+
+    // build one def from a <rule> element that has a direct <regexp> child
+    fn def_from_rule(
+        rule: roxmltree::Node,
+        regexp: roxmltree::Node,
+        source: String,
+        enabled: bool,
+    ) -> Option<RegexRuleDef> {
+        let pattern = regexp.text().unwrap_or_default().trim().to_string();
+        if pattern.is_empty() {
+            return None;
+        }
+        let case_sensitive = regexp
+            .attribute("case_sensitive")
+            .map(|x| x == "yes" || x == "true")
+            .unwrap_or(false);
+
+        let converted = super::utils::from_java_regex(&pattern, case_sensitive, false).ok()?;
+        let regex = Regex::new(converted);
+        // a rule whose regex cannot compile would panic at runtime: skip it
+        if regex.try_compile().is_err() {
+            log::warn!("regex rule {} cannot compile, skipped", source);
+            return None;
+        }
+
+        let mut suggestions = Vec::new();
+        let mut message = String::new();
+        if let Some(m) = rule
+            .children()
+            .find(|c| c.is_element() && c.tag_name().name() == "message")
+        {
+            for node in m.children() {
+                if node.is_text() {
+                    let t = node.text().unwrap_or_default();
+                    // raw file: only meaningful text (skip pure indentation)
+                    if !t.trim().is_empty() {
+                        message.push_str(t.trim());
+                    }
+                } else if node.is_element() && node.tag_name().name() == "suggestion" {
+                    let mut parts = Vec::new();
+                    for child in node.children() {
+                        if child.is_text() {
+                            parts.extend(lit_with_backrefs(child.text().unwrap_or_default()));
+                        } else if child.is_element() && child.tag_name().name() == "match" {
+                            let no: usize = child
+                                .attribute("no")
+                                .and_then(|x| x.parse().ok())
+                                .unwrap_or(1);
+                            match (
+                                child.attribute("regexp_match"),
+                                child.attribute("regexp_replace"),
+                            ) {
+                                (Some(rm), Some(rr)) => {
+                                    let inner = Regex::new(rm.to_string());
+                                    if inner.try_compile().is_err() {
+                                        log::warn!(
+                                            "regex rule {}: match regexp_match cannot compile",
+                                            source
+                                        );
+                                        continue;
+                                    }
+                                    parts.push(RegexSugPart::GroupMatch {
+                                        group: no,
+                                        regex: inner,
+                                        replace: replace_parts(rr),
+                                    });
+                                }
+                                _ => parts.push(RegexSugPart::Group(no)),
+                            }
+                        }
+                    }
+                    suggestions.push(parts);
+                }
+            }
+        }
+        if suggestions.is_empty() {
+            // no suggestion: LT still flags with no replacement
+            suggestions.push(Vec::new());
+        }
+
+        Some(RegexRuleDef {
+            source,
+            regex,
+            suggestions,
+            message,
+            enabled,
+        })
+    }
+
+    let mut defs = Vec::new();
+
+    for node in doc
+        .root_element()
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name() == "category")
+    {
+        let category_id = node.attribute("id").unwrap_or("MISC").to_string();
+
+        for group_or_rule in node
+            .children()
+            .filter(|c| c.is_element() && (c.tag_name().name() == "rulegroup" || c.tag_name().name() == "rule"))
+        {
+            if group_or_rule.tag_name().name() == "rule" {
+                let regexp = match group_or_rule
+                    .children()
+                    .find(|c| c.is_element() && c.tag_name().name() == "regexp")
+                {
+                    Some(r) => r,
+                    None => continue,
+                };
+                let rule_id = match group_or_rule.attribute("id") {
+                    Some(id) => id.to_string(),
+                    None => continue,
+                };
+                let enabled = default_on(group_or_rule) && !has_picky(group_or_rule);
+                let source = format!("{}/{}/{}", category_id, rule_id, 0);
+                if let Some(def) = def_from_rule(group_or_rule, regexp, source, enabled) {
+                    defs.push(def);
+                }
+            } else {
+                // rulegroup
+                let group_id = group_or_rule.attribute("id").unwrap_or_default().to_string();
+                let group_on = default_on(group_or_rule);
+                let group_picky = has_picky(group_or_rule);
+                let mut n = 0usize;
+                for child in group_or_rule
+                    .children()
+                    .filter(|c| c.is_element() && c.tag_name().name() == "rule")
+                {
+                    let idx = n;
+                    n += 1;
+                    let regexp = match child
+                        .children()
+                        .find(|c| c.is_element() && c.tag_name().name() == "regexp")
+                    {
+                        Some(r) => r,
+                        None => continue,
+                    };
+                    let sub_id = child.attribute("id").map(|x| x.to_string());
+                    let enabled =
+                        default_on(child) && group_on && !group_picky && !has_picky(child);
+                    let source = match &sub_id {
+                        Some(sub) => format!("{}/{}/{}", category_id, sub, 0),
+                        None => format!("{}/{}/{}", category_id, group_id, idx),
+                    };
+                    if let Some(def) = def_from_rule(child, regexp, source, enabled) {
+                        defs.push(def);
+                    }
+                }
+            }
+        }
+    }
+
+    defs
 }

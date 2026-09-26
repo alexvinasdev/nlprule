@@ -48,6 +48,10 @@ pub struct Rules {
     pub(crate) builtin_lang: Option<String>,
     /// Shared morphological synthesizer used by rules to inflect lemmas in suggestions.
     pub(crate) synth: Option<std::sync::Arc<crate::rule::synthesizer::Synthesizer>>,
+    /// Rule-level `<regexp>` rules (regex-on-sentence-text), applied per
+    /// sentence like the pattern rules.
+    #[serde(default)]
+    pub(crate) regex_rules: Vec<crate::rule::regex_rule::RegexRuleDef>,
 }
 
 
@@ -383,6 +387,20 @@ impl Rules {
             output.push((i, suggestion));
         }
 
+        // rule-level <regexp> rules (regex-on-sentence-text); indices after
+        // the built-ins so pattern rules and built-ins keep winning equal-
+        // span ties, mirroring LT's text-level-rule ordering
+        for (i, suggestion) in self
+            .regex_rules
+            .iter()
+            .filter(|rule| rule.enabled)
+            .flat_map(|rule| rule.apply(plain_sentence.text()))
+            .enumerate()
+            .map(|(k, sugg)| (self.rules.len() + 1_000_000 + k, sugg))
+        {
+            output.push((i, suggestion));
+        }
+
 
         let n_pattern_rules = self.rules.len();
         let en_mode = matches!(self.builtin_lang.as_deref(), Some("en") | Some("ar"));
@@ -613,6 +631,7 @@ where
             synth: None,
             filter_data: Default::default(),
             builtin_lang: None,
+            regex_rules: Vec::new(),
         }
     }
 }

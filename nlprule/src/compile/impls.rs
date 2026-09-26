@@ -429,7 +429,10 @@ impl Rules {
         options: RulesLangOptions,
         filter_data: crate::rule::filter_data::FilterData,
     ) -> Self {
-        let rules = super::parse_structure::read_rules(path);
+        let (rules, mut regex_rules) = super::parse_structure::read_rules(path);
+        if std::env::var("NLPRULE_NO_REGEX_RULES").is_ok() {
+            regex_rules = Vec::new();
+        }
         let mut errors: HashMap<String, usize> = HashMap::new();
 
         let rules: Vec<_> = rules
@@ -548,6 +551,7 @@ impl Rules {
             synth: build_info.synthesizer().cloned(),
             filter_data,
             builtin_lang: None,
+            regex_rules,
         }
     }
 }
