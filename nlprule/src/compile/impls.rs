@@ -124,8 +124,15 @@ impl Tagger {
         word_store.extend(common_words.iter().map(|x| x.as_str()));
 
         for (word, inflection, tag) in lines.iter() {
+            // some exported dictionaries contain inflection-only rows with
+            // an empty surface form (e.g. crh); LT's loader ignores them
+            if word.is_empty() {
+                continue;
+            }
             word_store.insert(word);
-            word_store.insert(inflection);
+            if !inflection.is_empty() {
+                word_store.insert(inflection);
+            }
             tag_store.insert(tag);
         }
 

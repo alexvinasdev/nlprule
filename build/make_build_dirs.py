@@ -35,6 +35,7 @@ DICT_SOURCES = {
     "ast": ("jar", "asturian-pos-dict.jar", "asturian"),
     "br": ("loose", "breton"),
     "ca": ("jar", "catalan-pos-dict.jar", "ca-ES"),
+    "crh": ("jar", "morfologik-crh-lt.jar", "crimean_tatar"),
     "da": ("loose", "danish"),
     "de": ("jar", "german-pos-dict.jar", "german"),
     "de-DE-x-simple-language": ("jar", "german-pos-dict.jar", "german"),
