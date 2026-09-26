@@ -283,6 +283,37 @@ pub(crate) fn uppercase_sentence_start(
     Vec::new()
 }
 
+/// Port of LT's `KhmerSpaceBeforeRule` (AbstractSpaceBeforeRule): a missing
+/// real space before the conjunctions ដើម្បី/និង/ពីព្រោះ. LT iterates its
+/// token list from index 1 (index 0 is the artificial SENT_START, which
+/// never equals " " or "("), so a sentence-initial conjunction fires too;
+/// a preceding "(" suppresses the match.
+pub(crate) fn khmer_space_before(sentence: &Sentence) -> Vec<Suggestion> {
+    const CONJUNCTIONS: [&str; 3] = ["ដើម្បី", "និង", "ពីព្រោះ"];
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    for (idx, token) in tokens.iter().enumerate() {
+        let word = token.word().as_str();
+        if !CONJUNCTIONS.contains(&word) {
+            continue;
+        }
+        // LT's previous token is " " exactly when real whitespace precedes;
+        // our has_space_before covers any whitespace char. "(" suppresses.
+        let prev_is_open_paren = idx > 0 && tokens[idx - 1].word().as_str() == "(";
+        let missing_space = idx == 0 || (!token.has_space_before() && !prev_is_open_paren);
+        if !missing_space {
+            continue;
+        }
+        let span = Span::from_positions(token.span().start(), token.span().end());
+        out.push(Suggestion::new(
+            "KM_SPACE_BEFORE_CONJUNCTION".to_string(),
+            "Missing space before conjunction.".to_string(),
+            span,
+            vec![format!(" {}", word)],
+        ));
+    }
+    out
+}
 // ---------------------------------------------------------------------------
 // MorfologikSpellerRule / SpellingCheckRule port (LT 6.5)
 // ---------------------------------------------------------------------------
@@ -395,6 +426,14 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
             ignore: spelling_lists!("uk", "ignore.txt", "spelling.txt"),
             prohibit: &[],
         },
+        // LT's KhmerHunspellRule: generic id, khmer script, hunspell
+        // km_KH dictionary as the accepted-words wordlist
+        "km" => SpellingRuleConfig {
+            id: "HUNSPELL_RULE",
+            latin_script: false,
+            ignore: spelling_lists!("km", "ignore.txt"),
+            prohibit: &[],
+        },
         _ => return None,
     })
 }
@@ -430,6 +469,20 @@ fn is_latin(c: char) -> bool {
         || (0x1E00..=0x1EFF).contains(&cp)
 }
 
+/// Java's \\p{L} — Unicode general category L* exactly. Khmer vowel signs
+/// and diacritics (U+17B4..U+17DB, U+17DD) are marks/signs, not letters:
+/// LT's HunspellRule.tokenizeText splits runs on them, so hunspell checks
+/// each consonant cluster of a Khmer word ("បញ្ញត្តិ" → "បញ" "ញត" "តិ"),
+/// flagging every cluster missing from the km_KH dictionary. Outside the
+/// Khmer block is_alphabetic() is used (identical for Latin/digits).
+fn is_java_letter(c: char) -> bool {
+    match c as u32 {
+        0x1780..=0x17B3 | 0x17D7 | 0x17DC => true, // Khmer letters
+        0x17B4..=0x17D6 | 0x17D8..=0x17DB | 0x17DD => false, // marks/signs/punct
+        _ => c.is_alphabetic(),
+    }
+}
+
 /// Port of `MorfologikSpellerRule.match` (simplified: plain whole-token lookup,
 /// no wrong-split detection, no compound handling).
 pub(crate) fn morfologik_spelling(
@@ -459,11 +512,51 @@ pub(crate) fn morfologik_spelling(
 
     for (idx, token) in tokens.iter().enumerate() {
         let word = token.word().as_str();
-        if word.is_empty()
-            || is_url(word)
-            || is_email(word)
-            || is_spelling_ignored_token(token)
-            || spelling_ignored(word, &config)
+        if word.is_empty() || is_url(word) || is_email(word) || is_spelling_ignored_token(token) {
+            continue;
+        }
+        // km: LT's KhmerHunspellRule splits tokens into \\p{L} runs (Khmer
+        // vowel signs/diacritics are split points) and hunspell-checks each
+        // consonant cluster — the generic whole-token path below would flag
+        // whole Khmer words instead. Wrong-split matches are skipped: they
+        // share this rule id with a direct flag, so id agreement is unaffected.
+        if lang == "km" {
+            let base = token.span().start();
+            // (byte_start, byte_end, char_start, char_end) per letter run
+            let mut runs: Vec<(usize, usize, usize, usize)> = Vec::new();
+            let mut open: Option<(usize, usize)> = None;
+            let mut ci = 0usize;
+            for (bi, c) in word.char_indices() {
+                if is_java_letter(c) {
+                    if open.is_none() {
+                        open = Some((bi, ci));
+                    }
+                } else if let Some((bs, cs)) = open.take() {
+                    runs.push((bs, bi, cs, ci));
+                }
+                ci += 1;
+            }
+            if let Some((bs, cs)) = open {
+                runs.push((bs, word.len(), cs, ci));
+            }
+            for (bs, be, cs, ce) in runs {
+                let run = &word[bs..be];
+                let prohibited = config.prohibit.contains(&run);
+                let known = speller.is_known(run);
+                // HunspellRule.isMisspelled: (!spell && !ignoreWord) || isProhibited
+                if !prohibited && (known || config.ignore.contains(&run)) {
+                    continue;
+                }
+                out.push(Suggestion::new(
+                    config.id.to_string(),
+                    "Possible spelling mistake found.".to_string(),
+                    Span::new(base.byte + bs..base.byte + be, base.char + cs..base.char + ce),
+                    Vec::new(),
+                ));
+            }
+            continue;
+        }
+        if spelling_ignored(word, &config)
             // fragments of hyphenated splits and single characters (our
             // tokenizer splits where LT's does not)
             || word.chars().count() < 2
