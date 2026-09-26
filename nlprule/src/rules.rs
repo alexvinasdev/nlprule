@@ -117,15 +117,24 @@ fn clean_overlapping(suggestions: Vec<Suggestion>, lang: Option<&str>) -> Vec<Su
             continue;
         }
 
-        // overlapping: language priorities first (LT's getPriorityForId,
-        // e.g. Dutch's SimpleReplaceRule family or English's big id map),
-        // then the longer match, then the later match
+        // overlapping: CleanOverlappingFilter semantics — language priority
+        // (getPriorityForId) first; on tie the longer error; on tie the later
+        // one. Never summed: a -1 rule loses to any 0-priority match however
+        // long it is (pl ZDANIA_ZLOZONE vs UPPERCASE_SENTENCE_START).
         let priority_of = |sugg: &Suggestion| -> isize {
             crate::rule::priorities::priority_for_id(lang, sugg.source()) as isize
         };
-        let cur_priority = priority_of(&rule_match) + (cur_to - cur_from) as isize;
-        let prev_priority = priority_of(&prev) + (prev_to - prev_from) as isize;
-        if cur_priority >= prev_priority {
+        let mut cur_priority = priority_of(&rule_match);
+        let mut prev_priority = priority_of(&prev);
+        if cur_priority == prev_priority {
+            // take the longest error:
+            cur_priority = (cur_to - cur_from) as isize;
+            prev_priority = (prev_to - prev_from) as isize;
+        }
+        if cur_priority == prev_priority {
+            cur_priority += 1; // take the last one (LT: keep web UI results)
+        }
+        if cur_priority > prev_priority {
             prev = rule_match;
             let span = prev.span().char().clone();
             prev_from = span.start;
@@ -227,6 +236,9 @@ impl Rules {
             self.builtin_lang.as_deref(),
             ctx,
         ));
+        if self.builtin_lang.as_deref() == Some("km") {
+            out.extend(crate::builtins::khmer_space_before(sentence));
+        }
         let tokens: Vec<_> = sentence.iter().collect();
         // SimpleReplaceRule phrase table (nl): case-sensitive multiword
         // lookup with sub-rule ids derived from the wrong phrase

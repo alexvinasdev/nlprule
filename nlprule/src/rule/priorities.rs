@@ -354,6 +354,16 @@ pub(crate) fn priority_for_id(lang: Option<&str>, id: &str) -> i32 {
             }
         }
         "es" => es_static(id).unwrap_or(0),
+        "pl" => {
+            // Polish.getPriorityForId: ZDANIA_ZLOZONE must not override more
+            // important rules (e.g. UPPERCASE_SENTENCE_START at sentence start)
+            // (suggestion sources are "CATEGORY/RULE_ID[/match]", builtins bare)
+            let rule_id = id.split('/').nth(1).unwrap_or(id);
+            if rule_id == "ZDANIA_ZLOZONE" {
+                return -1;
+            }
+            0
+        }
         "pt" => {
             if id.starts_with("MORFOLOGIK_RULE") {
                 return -50;
