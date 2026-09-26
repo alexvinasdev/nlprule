@@ -426,6 +426,15 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
             ignore: spelling_lists!("uk", "ignore.txt", "spelling.txt"),
             prohibit: &[],
         },
+        // MorfologikPolishSpellerRule: pl/hunspell/pl_PL.dict + ignore/
+        // spelling/prohibit lists; compound-adjective suppression
+        // (isNotCompound) not ported yet
+        "pl" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_PL_PL",
+            latin_script: true,
+            ignore: spelling_lists!("pl", "ignore.txt", "spelling.txt"),
+            prohibit: spelling_lists!("pl", "prohibit.txt"),
+        },
         // LT's KhmerHunspellRule: generic id, khmer script, hunspell
         // km_KH dictionary as the accepted-words wordlist
         "km" => SpellingRuleConfig {

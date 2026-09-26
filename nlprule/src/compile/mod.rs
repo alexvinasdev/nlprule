@@ -295,13 +295,19 @@ fn build_filter_data(
             }
         }
 
-        // sorted lowercase key -> (index << 5) | frequency
+        // sorted key -> (index << 5) | frequency. Dictionaries without
+        // case conversion (pl: encoder=none) keep original-case keys
+        let case_sensitive = matches!(lang_code, "pl");
         let mut keyed: Vec<(String, usize, u8)> = forms
             .iter()
             .enumerate()
             .map(|(i, f)| {
                 (
-                    f.to_lowercase(),
+                    if case_sensitive {
+                        f.clone()
+                    } else {
+                        f.to_lowercase()
+                    },
                     i,
                     freq_by_form.get(f).copied().unwrap_or(0),
                 )
@@ -317,6 +323,7 @@ fn build_filter_data(
         data.speller = Some(SpellerDict {
             map_bytes: builder.into_inner().unwrap_or_default(),
             forms,
+            case_sensitive,
         });
     }
 

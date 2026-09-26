@@ -15,9 +15,15 @@ use std::collections::HashMap;
 pub struct SpellerDict {
     /// `fst::Map` data: lowercased form -> `(index << 5) | frequency`,
     /// where frequency is morfologik's 0..=25 rank (higher = more frequent).
+    /// For case-sensitive dictionaries (pl: `fsa.dict.encoder=none`, no
+    /// conversion) the keys keep their original case instead.
     pub map_bytes: Vec<u8>,
     /// Original-cased forms (deduplicated).
     pub forms: Vec<String>,
+    /// LT dictionaries without case conversion (pl_PL) keep proper-noun
+    /// casing: "Bledem" is a key but "bledem" must still be misspelled.
+    #[serde(default)]
+    pub case_sensitive: bool,
 }
 
 impl SpellerDict {
@@ -34,8 +40,18 @@ impl SpellerDict {
         if word.is_empty() {
             return false;
         }
-        let lower = word.to_lowercase();
-        self.map().get(&lower).is_some()
+        if self.case_sensitive {
+            // exact-case lookup first; capitalized common words at sentence
+            // start still resolve via the lowercase fallback
+            if self.map().get(word).is_some() {
+                return true;
+            }
+            let lower = word.to_lowercase();
+            lower != word && self.map().get(&lower).is_some()
+        } else {
+            let lower = word.to_lowercase();
+            self.map().get(&lower).is_some()
+        }
     }
 
     fn unpack(value: u64) -> (usize, u8) {
