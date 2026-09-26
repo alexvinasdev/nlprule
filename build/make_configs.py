@@ -29,7 +29,7 @@ def main():
             continue
         lang = (build_dir / "lang_code.txt").read_text().strip()
         out = args.configs / lang
-        if lang in {"en", "de", "es"}:
+        if lang in {"en", "de", "es", "gl"}:
             # do not overwrite manually tuned configs
             continue
         out.mkdir(parents=True, exist_ok=True)
@@ -75,10 +75,16 @@ def main():
         if (out / "tokenizer.json").exists():
             existing_tok = json.loads((out / "tokenizer.json").read_text())
 
+        # language-specific join regexes beyond the URL one survive a regen
+        extra_joins = [
+            r
+            for r in existing_tok.get("extra_join_regexes", [])
+            if r != URL_JOIN_REGEX
+        ]
         tokenizer_cfg = {
             "allow_errors": True,
             "ignore_ids": [],
-            "extra_join_regexes": [URL_JOIN_REGEX],
+            "extra_join_regexes": [URL_JOIN_REGEX] + extra_joins,
         }
         # preserve settings not derived here (e.g. cjk_segmentation)
         for key in ("cjk_segmentation", "extra_split_chars", "split_contractions",
