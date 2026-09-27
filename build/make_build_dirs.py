@@ -38,7 +38,7 @@ DICT_SOURCES = {
     "crh": ("jar", "morfologik-crh-lt.jar", "crimean_tatar"),
     "da": ("loose", "danish"),
     "de": ("jar", "german-pos-dict.jar", "german"),
-    "de-DE-x-simple-language": ("jar", "german-pos-dict.jar", "german"),
+    "de-DE-x-simple-language": ("jar", "german-pos-dict.jar", "german", "de"),
     "el": ("loose", "greek"),
     "en": ("jar", "english-pos-dict.jar", "english"),
     "es": ("jar", "spanish-pos-dict.jar", "es-ES"),
@@ -570,7 +570,14 @@ def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
                 extracted = extract_dict(None, source[1], resource_dir, tmp)
             else:
                 jar_path = lt_dir / "libs" / source[1]
-                extracted = extract_dict(jar_path, source[2], resource_dir, tmp)
+                # shared dictionaries (e.g. de-DE-x-simple uses German) live
+                # under the donor language's resource dir
+                res_dir = (
+                    lt_dir / "org" / "languagetool" / "resource" / source[3]
+                    if len(source) > 3
+                    else resource_dir
+                )
+                extracted = extract_dict(jar_path, source[2], res_dir, tmp)
 
             if ".dict" in extracted and ".info" in extracted:
                 if not output_dump.exists():
