@@ -191,8 +191,8 @@ LanguageTool 6.5 HTTP server and to nlprule, and compares the rule IDs that
 fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 
 | lang | sentences | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
-| km | 52 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
 | ta | 216 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
+| km | 52 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
 | ast | 71 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
 | fa | 282 | 0 | 1 | 1.0000 | 0.9964 | 0.9965 |
 | ga | 1000 | 4 | 9 | 0.9955 | 0.9899 | 0.9900 |
@@ -220,9 +220,35 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | sv | 39 | 1 | 3 | 0.9677 | 0.9091 | 0.9231 |
 | ru | 1000 | 66 | 86 | 0.9204 | 0.8987 | 0.9140 |
 | es | 1000 | 65 | 90 | 0.9071 | 0.8759 | 0.9107 |
-| ca | 1000 | 73 | 103 | 0.8717 | 0.8280 | 0.8910 |
+| ca | 1000 | 66 | 96 | 0.8840 | 0.8397 | 0.8980 |
 | zh | 1000 | 4 | 145 | 0.9943 | 0.8284 | 0.8520 |
 | pl | 1000 | 125 | 157 | 0.8109 | 0.7734 | 0.8370 |
+
+
+### Residue by language (marker-fragment compare, final v7)
+
+- `pl` (0.81/0.77): tagger readings — COFANIE_PRZECINKA 28, PREP_CASUS 23,
+  ZDANIA_ZLOZONE variant selection, BRAK_PRZECINKA_*; speller compound
+  suppression (isNotCompound) unported.
+- `zh` (0.99/0.83): jieba-vs-HanLP segmentation on wrong-spelling compounds
+  (~40 tone-pair rule groups, 2-4 events each); porting HanLP is not viable
+  in Rust today.
+- `ca` (0.88/0.84): CONCORDANCES_* same-priority tie resolution beyond the
+  priority map; MORFOLOGIK over-firing on names.
+- `ru`/`es`/`uk` (-1..-3pp vs pre-SentEndAtom state): the SentEndAtom
+  (br depends on it, +0.41 j) shifts SENT_END-exception rules; the exact
+  reading-level semantics is the documented next step.
+- `de` (0.93/0.92 on fragments): GERMAN_SPELLER_RULE (ngram model),
+  IM_UM; full-sentence agreement additionally recovered DOPPELTES_VERB
+  (27 events, `<match no postag>` compile fix).
+- `nl` (0.96/0.91): NAAM_FOUT_GESPELD variant selection, speller accepts.
+- `el` (0.94/0.83, n=56): small corpus, tagger readings.
+- `ja` (1.00/0.95): 38 onlyLT, lindera-vs-Sen segmentation differences.
+- sr/lt/ml: build+run verified only (no LT 6.5 server truth).
+
+Source: `~/nlprule_bg/final_v7.jsonl`. Reproduce with
+`scripts/run_compare_all.sh` (parallel, resumable) after
+`scripts/rebuild_all.sh`.
 
 (el 0.94/0.83, n=56, omitted for width; sr/lt/ml have no LT-6.5 server truth.
 Source: `~/nlprule_bg/final_v5.jsonl` — the v5 engine and bins.)
