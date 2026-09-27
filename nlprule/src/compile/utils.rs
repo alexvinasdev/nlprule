@@ -332,15 +332,122 @@ mod regex {
                     }
                 }
             }
+            // brace quantifiers: `{n}`, `{n,}`, `{n,m}` followed by `+`
+            // (e.g. pl SKROTOWCE `\p{Lu}{2}+[i]*`)
+            let bytes = regex.as_bytes();
+            let mut i = 0usize;
+            while i < bytes.len() {
+                if bytes[i] == b'{' {
+                    let mut j = i + 1;
+                    let mut digit_or_comma = false;
+                    while j < bytes.len()
+                        && (bytes[j].is_ascii_digit() || bytes[j] == b',')
+                    {
+                        digit_or_comma = true;
+                        j += 1;
+                    }
+                    if digit_or_comma && j < bytes.len() && bytes[j] == b'}' && j + 1 < bytes.len() && bytes[j + 1] == b'+' {
+                        let pos = j + 1;
+                        if possessive.map_or(true, |(p, _)| pos < p) {
+                            possessive = Some((pos, 1));
+                        }
+                    }
+                }
+                i += 1;
+            }
             match possessive {
                 Some((pos, len)) => {
-                    let quant = regex[pos..pos + len].chars().next().unwrap();
+                    let quant = if len == 2 {
+                        regex[pos..pos + len].chars().next().unwrap()
+                    } else {
+                        // brace possessive: drop just the `+`
+                        regex.remove(pos);
+                        continue;
+                    };
                     regex.replace_range(pos..pos + len, &quant.to_string());
                 }
                 None => break,
             }
         }
         regex = regex.replace("(?-)", "");
+        // quantifier immediately followed by a brace quantifier (pl
+        // JEDNOSTKA_LICZBA `\d+{1,4}r`): drop the redundant first
+        // quantifier, keeping the more specific brace repetition
+        {
+            let b = regex.as_bytes();
+            let mut out = String::with_capacity(regex.len());
+            let mut i = 0usize;
+            let mut class_depth = 0usize;
+            while i < b.len() {
+                let c = b[i];
+                if c == b'\\' && i + 1 < b.len() {
+                    // advance past the backslash AND the full escaped
+                    // character (it may be multi-byte, e.g. `\—`)
+                    let next_len = utf8_char_len(b[i + 1]);
+                    out.push_str(&regex[i..i + 1 + next_len]);
+                    i += 1 + next_len;
+                    continue;
+                }
+                if c == b'[' && class_depth == 0 {
+                    class_depth += 1;
+                } else if c == b']' && class_depth > 0 {
+                    class_depth -= 1;
+                }
+                if class_depth == 0 && (c == b'+' || c == b'*' || c == b'?') {
+                    // look ahead for `{n}` / `{n,}` / `{n,m}`
+                    if i + 1 < b.len() && b[i + 1] == b'{' {
+                        let mut j = i + 2;
+                        let mut digits = false;
+                        while j < b.len() && (b[j].is_ascii_digit() || b[j] == b',') {
+                            digits = true;
+                            j += 1;
+                        }
+                        if digits && j < b.len() && b[j] == b'}' {
+                            // skip the redundant quantifier character
+                            i += 1;
+                            continue;
+                        }
+                    }
+                }
+                let ch_len = utf8_char_len(b[i]);
+                out.push_str(&regex[i..i + ch_len]);
+                i += ch_len;
+            }
+            regex = out;
+        }
+        // Java script property syntax `\p{IsLatin}` → `\p{Latin}` (oniguruma
+        // does not accept the `Is` prefix; nl SPATIE_NA)
+        regex = regex.replace("\\p{Is", "\\p{").replace("\\P{Is", "\\P{");
+        // Java octal escapes `\0n`/`\0nn` are not backreferences but literal
+        // code points (pl BRAK_KROPKI `[...\02]`); regex-syntax rejects
+        // `\0N` as a backreference so convert to hex escapes first
+        {
+            let mut converted = String::with_capacity(regex.len());
+            let chars: Vec<(usize, char)> = regex.char_indices().collect();
+            let mut idx = 0usize;
+            while idx < chars.len() {
+                let (_, c) = chars[idx];
+                if c == '\\'
+                    && idx + 1 < chars.len()
+                    && chars[idx + 1].1 == '0'
+                {
+                    let mut j = idx + 2;
+                    let mut val: u32 = 0;
+                    let mut digits = 0;
+                    while j < chars.len() && digits < 2 && ('0'..='7').contains(&chars[j].1) {
+                        val = val * 8 + chars[j].1.to_digit(8).unwrap();
+                        j += 1;
+                        digits += 1;
+                    }
+                    converted.push_str(&format!("\\x{{{:x}}}", val));
+                    idx = j;
+                    continue;
+                }
+                converted.push(c);
+                idx += 1;
+            }
+            regex = converted;
+        }
         // duplicate inline flags, e.g. `(?ii)` (Java tolerates, regex-syntax
         // does not)
         loop {

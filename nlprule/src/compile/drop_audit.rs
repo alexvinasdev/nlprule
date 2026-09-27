@@ -50,6 +50,25 @@ fn drop_audit() {
         total_err += n_err;
         total_regex += regex_defs.len();
 
+        if let Ok(find) = std::env::var("DROP_AUDIT_FIND") {
+            for r in rules.iter().filter_map(|r| r.as_ref().ok()) {
+                let has_group = r
+                    .1
+                    .as_ref()
+                    .map_or(false, |g| g.id.contains(&find));
+                if r.0.id.as_deref().map_or(false, |i| i.contains(find.as_str()))
+                    || has_group
+                {
+                    eprintln!(
+                        "   FIND {lang}: rule id={:?} group={:?} name={:?}",
+                        r.0.id,
+                        r.1.as_ref().map(|g| g.id.clone()),
+                        r.0.name
+                    );
+                }
+            }
+        }
+
         eprintln!(
             "== {lang}: {} ok, {n_err} ERR, {} regex defs",
             rules.len() - n_err,
@@ -98,5 +117,26 @@ fn regex_probe() {
             }
         }
         Err(e) => println!("CONV ERR: {:?}", e),
+    }
+}
+
+#[test]
+fn regex_probe3() {
+    for (name, pat) in [
+        ("islatin", r"\p{IsLatin}{2,30}"),
+        ("brace-possessive", r"\p{Lu}{2}+[i]*\p{Lu}+"),
+        ("brace-possessive2", r"[\p{L}&&[^\p{Lu}]]{1,4}+"),
+        ("octal-class", r#"[?.!,:;\"\02]"#),
+    ] {
+        match crate::compile::utils::from_java_regex(pat, false, false) {
+            Ok(s) => {
+                let r = crate::utils::regex::Regex::new(s);
+                match r.try_compile() {
+                    Ok(_) => println!("{}: OK", name),
+                    Err(e) => println!("{}: COMPILE ERR {:?}", name, e),
+                }
+            }
+            Err(e) => println!("{}: CONV ERR {:?}", name, e),
+        }
     }
 }
