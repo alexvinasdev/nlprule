@@ -247,6 +247,31 @@ impl Rules {
     /// Compute the suggestions for the given sentence by checking all rules.
     /// Builtin rules that are Java classes in LT (no XML): duplicated words,
     /// doubled punctuation and sentence-start casing.
+    /// Inventory of the loaded rules for the coverage audit tool
+    /// (`scripts/coverage_audit.py`): every pattern rule with its source and
+    /// enabled flag, the rule-level `<regexp>` rules, and the builtin ids
+    /// applicable for this language.
+    pub fn dump_rules(&self) -> serde_json::Value {
+        let pattern: Vec<serde_json::Value> = self
+            .rules
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "source": r.id().to_string(),
+                    "enabled": r.enabled(),
+                })
+            })
+            .collect();
+        let regex: Vec<String> = self
+            .regex_rules
+            .iter()
+            .map(|r| r.source.clone())
+            .collect();
+        let builtins =
+            crate::builtins::builtin_ids(self.builtin_lang.as_deref(), &self.filter_data);
+        serde_json::json!({ "pattern": pattern, "regex": regex, "builtins": builtins })
+    }
+
     fn builtin_suggestions(
         &self,
         sentence: &Sentence,

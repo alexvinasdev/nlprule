@@ -361,6 +361,45 @@ struct SpellingRuleConfig {
     prohibit: &'static [&'static str],
 }
 
+/// Rule id the WORD_REPEAT family emits for a language (LT renames it
+/// per language). Keep in sync with `builtin_suggestions`.
+pub(crate) fn repeat_rule_id(lang: Option<&str>) -> &'static str {
+    match lang {
+        Some("de") => "GERMAN_WORD_REPEAT_RULE",
+        Some("es") => "SPANISH_WORD_REPEAT_RULE",
+        Some("fr") => "FRENCH_WORD_REPEAT_RULE",
+        Some("uk") => "UKRAINIAN_WORD_REPEAT_RULE",
+        Some("ca") => "CATALAN_WORD_REPEAT_RULE",
+        Some("pt") => "PORTUGUESE_WORD_REPEAT_RULE",
+        Some("it") => "ITALIAN_WORD_REPEAT_RULE",
+        _ => "WORD_REPEAT_RULE",
+    }
+}
+
+/// Inventory of the rule ids the built-in (Java-only in LT) families can
+/// emit for this language. Mirrors the arms of `Rules::builtin_suggestions`;
+/// keep in sync when porting new builtin families.
+pub(crate) fn builtin_ids(
+    lang: Option<&str>,
+    filter_data: &crate::rule::filter_data::FilterData,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if filter_data.speller.is_some()
+        && lang.map_or(false, |l| spelling_config(l).is_some())
+    {
+        out.push(spelling_config(lang.unwrap()).unwrap().id.to_string());
+    }
+    out.push("UPPERCASE_SENTENCE_START".to_string());
+    if lang == Some("km") {
+        out.push("KM_SPACE_BEFORE_CONJUNCTION".to_string());
+    }
+    out.push(repeat_rule_id(lang).to_string());
+    if let Some(table) = filter_data.simple_replace.as_ref() {
+        out.push(table.prefix.clone());
+    }
+    out
+}
+
 fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
     Some(match lang {
         "es" => SpellingRuleConfig {

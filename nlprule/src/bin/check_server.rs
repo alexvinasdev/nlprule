@@ -8,6 +8,17 @@ use std::io::{self, BufRead, Write};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // `--dump-rules <rules.bin> [lang]`: inventory of loaded rules for the
+    // coverage audit tool; prints one JSON object and exits.
+    if args.get(1).map_or(false, |a| a == "--dump-rules") {
+        let rules = match args.get(3) {
+            Some(lang) => Rules::with_lang(&args[2], lang).unwrap(),
+            None => Rules::new(&args[2]).unwrap(),
+        };
+        serde_json::ser::to_writer(io::stdout(), &rules.dump_rules()).unwrap();
+        println!();
+        return;
+    }
     let mut tokenizer = Tokenizer::new(&args[1]).unwrap();
     // optional third argument: the language code, enables the language
     // specific behavior of the built-in Java-only rules and the
