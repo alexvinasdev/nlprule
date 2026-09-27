@@ -509,6 +509,9 @@ impl Tokenizer {
                 let token_text = sentence[range].trim();
 
                 let is_sentence_start = i == 0;
+                // LT JLanguageTool.analyzeText: `tokenArray[lastToken].setSentEnd()`
+                // — UNCONDITIONAL on the last non-whitespace token, punctuated
+                // or not (only trailing whitespace is skipped)
                 let is_sentence_end = i == n_token_strs - 1;
 
                 let mut tags: Vec<_> = self
@@ -571,9 +574,6 @@ impl Tokenizer {
                 )
             })
             .collect();
-
-        let last_idx = tokens.len() - 1;
-        *tokens[last_idx].is_sentence_end_mut() = true;
 
         let mut sentence = IncompleteSentence::new(tokens, sentence, &self.tagger);
 

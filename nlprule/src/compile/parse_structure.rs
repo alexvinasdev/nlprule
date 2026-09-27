@@ -286,6 +286,21 @@ fn get_exceptions(
                         Err(err) => return Some(Err(err)),
                     };
 
+                // LT: an exception whose postag lists SENT_END as an
+                // alternative (e.g. `[^M]*M:.*|SENT_END`) is the idiom to
+                // stop the token from matching the last real word of a
+                // sentence without terminal punctuation - the token that
+                // carries the merged SENT_END reading (plain postag
+                // alternatives are literal, so SENT_END is the only live
+                // alternative; br depends on it). OR BEFORE the offset wrap
+                // so scoped exceptions check the scoped position.
+                if x.postag
+                    .as_ref()
+                    .map_or(false, |p| p.split('|').any(|alt| alt.trim() == "SENT_END"))
+                {
+                    atom = OrAtom::or(vec![atom, SentEndAtom::default().into()]);
+                }
+
                 let offset = if let Some(scope) = &x.scope {
                     match scope.as_str() {
                         "next" => 1,
@@ -299,18 +314,6 @@ fn get_exceptions(
 
                 if offset != 0 {
                     atom = OffsetAtom::new(atom, offset).into();
-                }
-
-                // LT: an exception whose postag lists SENT_END as an
-                // alternative (e.g. `[^M]*M:.*|SENT_END`) is the idiom to
-                // stop the token from matching the last real word of a
-                // sentence without terminal punctuation - the token that
-                // carries the merged SENT_END reading.
-                if x.postag
-                    .as_ref()
-                    .map_or(false, |p| p.split('|').any(|alt| alt.trim() == "SENT_END"))
-                {
-                    atom = OrAtom::or(vec![atom, SentEndAtom::default().into()]);
                 }
 
                 if !only_shifted || (offset != 0) {
