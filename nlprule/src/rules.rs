@@ -157,7 +157,16 @@ impl Rules {
     /// - If the file content can not be deserialized to a rules set.
     pub fn new<P: AsRef<Path>>(p: P) -> Result<Self, Error> {
         let reader = BufReader::new(File::open(p.as_ref())?);
-        let rules: Rules = bincode::deserialize_from(reader)?;
+        let mut rules: Rules = bincode::deserialize_from(reader)?;
+        // A/B switch for the unifier element-filter restriction (LT Unifier
+        // parity commit): strip at load to measure its effect per language.
+        if std::env::var("NLPRULE_NO_UNIFIER_FILTER").is_ok() {
+            for rule in &mut rules.rules {
+                if let Some(u) = &mut rule.unification {
+                    u.element_filters = Vec::new();
+                }
+            }
+        }
         Ok(rules)
     }
 
@@ -168,6 +177,13 @@ impl Rules {
     pub fn with_lang<P: AsRef<Path>>(p: P, lang: &str) -> Result<Self, Error> {
         let mut rules = Self::new(p)?;
         rules.builtin_lang = Some(lang.to_string());
+        // dictionaries without case conversion (pl: encoder=none) need
+        // exact-case lookups — see SpellerDict::case_sensitive
+        if lang == "pl" {
+            if let Some(speller) = rules.filter_data.speller.as_mut() {
+                speller.case_sensitive = true;
+            }
+        }
         Ok(rules)
     }
 

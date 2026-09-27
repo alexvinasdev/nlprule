@@ -323,7 +323,7 @@ fn build_filter_data(
         data.speller = Some(SpellerDict {
             map_bytes: builder.into_inner().unwrap_or_default(),
             forms,
-            case_sensitive,
+            case_sensitive: false,
         });
     }
 

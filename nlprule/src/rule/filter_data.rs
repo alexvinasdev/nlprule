@@ -22,7 +22,9 @@ pub struct SpellerDict {
     pub forms: Vec<String>,
     /// LT dictionaries without case conversion (pl_PL) keep proper-noun
     /// casing: "Bledem" is a key but "bledem" must still be misspelled.
-    #[serde(default)]
+    /// Not serialized (bincode has no field versioning): the loader sets it
+    /// from the language code via [Rules::with_lang].
+    #[serde(skip)]
     pub case_sensitive: bool,
 }
 
