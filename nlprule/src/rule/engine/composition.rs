@@ -14,6 +14,56 @@ pub struct Matcher {
     pub negate: bool,
     pub case_sensitive: bool,
     pub empty_always_false: bool,
+    /// Transform applied to the referenced token's text for
+    /// `<match no="N" regexp_match="..." regexp_replace="..."
+    /// case_conversion="..."/>` used as pattern token content.
+    /// Only meaningful for the `Right(GraphId)` variant.
+    /// NOTE: always serialized (even `None`) — bincode is not
+    /// self-describing, an omitted trailing field cannot be defaulted on
+    /// read (UnexpectedEof), see matcher_subtransform_roundtrip test.
+    #[serde(default)]
+    pub sub_transform: Option<SubTransform>,
+}
+
+/// `<match no>` reference text transform (LT `Match` attributes).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubTransform {
+    /// Java-style regex the reference text must match
+    pub regex: Option<Regex>,
+    /// Replacement template (`$1` group refs) applied on match
+    pub replace: Option<String>,
+    /// `startlower` / `startupper` case conversion
+    pub case: Option<String>,
+}
+
+impl SubTransform {
+    pub fn apply(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        if let (Some(regex), Some(replace)) = (&self.regex, &self.replace) {
+            if regex.is_match(&out) {
+                // the port's Regex exposes java-like replace semantics via
+                // replace_all with $N group refs
+                out = regex.replace_all(&out, replace);
+            }
+        }
+        match self.case.as_deref() {
+            Some("startlower") => {
+                let mut chars = out.chars();
+                match chars.next() {
+                    Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+                    None => out,
+                }
+            }
+            Some("startupper") => {
+                let mut chars = out.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => out,
+                }
+            }
+            _ => out,
+        }
+    }
 }
 
 impl Matcher {
@@ -65,10 +115,14 @@ impl Matcher {
                         .tokens(sentence)
                         .next()
                         .map_or(false, |token| {
+                            let reference: std::borrow::Cow<str> = match &self.sub_transform {
+                                Some(transform) => transform.apply(token.word().as_str()).into(),
+                                None => std::borrow::Cow::Borrowed(token.word().as_str()),
+                            };
                             if case_sensitive {
-                                token.word().as_str() == input
+                                reference.as_ref() == input
                             } else {
-                                UniCase::new(token.word().as_str()) == UniCase::new(input)
+                                UniCase::new(reference.as_ref()) == UniCase::new(input)
                             }
                         })
                 }
@@ -649,5 +703,35 @@ impl Composition {
         );
 
         self.apply_recursive(sentence, position, 0, graph)
+    }
+}
+
+#[cfg(test)]
+mod rt_tests {
+    use super::*;
+
+    #[test]
+    fn matcher_subtransform_roundtrip() {
+        let m_none = Matcher {
+            matcher: either::Left(either::Left("x".into())),
+            negate: false,
+            case_sensitive: true,
+            empty_always_false: true,
+            sub_transform: None,
+        };
+        let m_some = Matcher {
+            sub_transform: Some(SubTransform {
+                regex: None,
+                replace: Some("y".into()),
+                case: Some("startlower".into()),
+            }),
+            ..m_none.clone()
+        };
+        let b1 = bincode::serialize(&m_none).unwrap();
+        let r1: Matcher = bincode::deserialize(&b1).unwrap();
+        assert!(r1.sub_transform.is_none());
+        let b2 = bincode::serialize(&m_some).unwrap();
+        let r2: Matcher = bincode::deserialize(&b2).unwrap();
+        assert!(r2.sub_transform.is_some());
     }
 }

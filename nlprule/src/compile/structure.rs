@@ -131,7 +131,46 @@ pub mod preprocess {
             }
         }
 
-        for event in out_events {
+        // drop whitespace-only antipattern elements: they sanitize to
+        // `<antipattern></antipattern>` which fails `$value` deserialization
+        // and an empty antipattern is a semantic no-op anyway
+        let mut filtered_events: Vec<xml::writer::XmlEvent> = Vec::new();
+        let mut i = 0;
+        while i < out_events.len() {
+            let is_antipattern_start = matches!(
+                &out_events[i],
+                xml::writer::XmlEvent::StartElement { name, .. }
+                    if name.local_name == "antipattern"
+            );
+            if is_antipattern_start {
+                // find the matching end element and check for real content
+                let mut j = i + 1;
+                while j < out_events.len()
+                    && !matches!(
+                        &out_events[j],
+                        xml::writer::XmlEvent::EndElement { name: Some(name), .. }
+                            if name.local_name == "antipattern"
+                    )
+                {
+                    j += 1;
+                }
+                let has_content = out_events[i + 1..j].iter().any(|e| {
+                    matches!(e, xml::writer::XmlEvent::StartElement { .. })
+                        || matches!(e, xml::writer::XmlEvent::Characters(_))
+                });
+                if has_content || j >= out_events.len() {
+                    filtered_events.push(out_events[i].clone());
+                } else {
+                    i = j + 1; // drop the whole element including both tags
+                    continue;
+                }
+            } else {
+                filtered_events.push(out_events[i].clone());
+            }
+            i += 1;
+        }
+
+        for event in filtered_events {
             writer.write(event).expect("error writing to output XML");
         }
 
@@ -200,7 +239,7 @@ pub struct Category {
     pub default: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct XmlString {
     #[serde(default)]
     pub text: String,
@@ -222,6 +261,7 @@ impl From<XmlString> for String {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct XmlText {
+    #[serde(default)]
     pub text: XmlString,
 }
 
@@ -297,6 +337,7 @@ pub struct Message {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExampleMarker {
+    #[serde(default)]
     pub text: XmlString,
 }
 
@@ -355,6 +396,20 @@ pub struct Sub {
     /// text still comes from the referenced token).
     pub postag: Option<String>,
     pub postag_regexp: Option<String>,
+    /// `<match no="N" regexp_match="..." regexp_replace="..."/>` inside a
+    /// pattern token: the token text is the referenced token's text with
+    /// the regex replacement applied (LT `Match` semantics).
+    pub regexp_match: Option<String>,
+    pub regexp_replace: Option<String>,
+    /// `case_conversion="startlower|startupper"` applied to the resolved
+    /// reference text before comparing.
+    pub case_conversion: Option<String>,
+    /// `<match ... setpos="yes">`: whether the postag replacement is
+    /// applied to the token's readings themselves (LT `Match` `setPos`).
+    pub setpos: Option<String>,
+    /// postag_replace is a suggestion-side concept; parsed so the rule is
+    /// not dropped, pattern-side use is ignored.
+    pub postag_replace: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -457,6 +512,16 @@ pub struct TokenVector {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Feature {
+    pub id: String,
+    /// `<feature id="case"><type id="acc"/></feature>`: unification feature
+    /// values the antipattern combination applies for (empty = all).
+    #[serde(default, rename = "type")]
+    pub types: Vec<FeatureType>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureType {
     pub id: String,
 }
 
@@ -682,7 +747,8 @@ pub struct DisambiguationRuleGroup {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EquivalenceToken {
-    pub postag: String,
+    /// `None` = the equivalence applies to any token (sr `<token/>`)
+    pub postag: Option<String>,
     pub postag_regexp: Option<String>,
 }
 
@@ -749,6 +815,500 @@ macro_rules! flatten_group {
 type GrammarRuleReading = (Rule, Option<Group>, Option<Category>);
 type DisambiguationRuleReading = (DisambiguationRule, Option<Group>, Option<Category>);
 
+/// Expand `<phraseref idref="X"/>` elements (and the `<includephrases>`
+/// wrapper) by splicing the referenced `<phrase>` token children inline,
+/// mirroring how LT 6.5 resolves phrases at rule-load time:
+///
+/// - `<phrase id=X>` with plain token children: `X` is that token sequence.
+/// - `<phrase id=X><includephrases><phraseref idref=A/><phraseref idref=B/>
+///   </includephrases></phrase>`: `X` is an ALTERNATION of A and B. Raw
+///   `<token>` children inside `<includephrases>` are IGNORED by LT (verified
+///   empirically against languagetool-commandline 6.5) — a phrase whose
+///   includephrases only has raw tokens expands to NOTHING.
+/// - `<phraseref idref=X/>` in a pattern splices X's tokens inline; if X is
+///   an alternation the rule is CLONED once per alternative (LT allows
+///   variable-length alternatives there; positional `<or>` cannot express
+///   that).
+/// - `<includephrases>` directly inside a pattern/marker is an alternation
+///   of its `<phraseref>` children and also clones the rule per alternative.
+///
+/// If no phraseref/includephrases is used outside the `<phrases>` block the
+/// input is returned unchanged (the definitions are inert, and rewriting
+/// the document would only risk escaping bugs).
+/// Remove whitespace-only `<antipattern>` elements (e.g. `<antipattern> </antipattern>`, 
+/// a stray space in some grammars). They sanitize to an empty `$value` which fails 
+/// deserialization, and an empty antipattern is a semantic no-op in LT too.
+fn strip_empty_antipatterns(raw_xml: &str) -> String {
+    let mut out = String::with_capacity(raw_xml.len());
+    let mut rest = raw_xml;
+    while let Some(pos) = rest.find("<antipattern") {
+        out.push_str(&rest[..pos]);
+        let open_end = rest[pos..]
+            .find('>')
+            .map(|i| pos + i + 1)
+            .unwrap_or(rest.len());
+        if let Some(close_rel) = rest[open_end..].find("</antipattern>") {
+            let close_start = open_end + close_rel;
+            let inner = &rest[open_end..close_start];
+            if inner.chars().all(char::is_whitespace) {
+                // drop the whole element; skip past the closing tag
+                rest = &rest[close_start + "</antipattern>".len()..];
+                continue;
+            }
+        }
+        out.push_str(&rest[pos..open_end]);
+        rest = &rest[open_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn expand_phrases(raw_xml: &str) -> String {
+    use std::collections::HashMap;
+    use xml::reader::{EventReader, ParserConfig};
+
+    fn esc_attr(v: &str) -> String {
+        v.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    }
+
+    fn esc_text(t: &str) -> String {
+        t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    }
+
+    // resolved phrase body: a token sequence or an alternation of sequences
+    #[derive(Clone)]
+    enum Body {
+        Seq(String),
+        Alt(Vec<String>),
+    }
+
+    // ---- pass 1: collect phrase definitions -------------------------------
+    enum Pending {
+        Seq { buf: String, stack: Vec<String> },
+        Alt { refs: Vec<String> },
+        None,
+    }
+
+    let mut phrases: HashMap<String, Pending> = HashMap::new();
+    let mut in_phrases = false;
+    let mut current_id: Option<String> = None;
+    let mut pending = Pending::None;
+
+    {
+        let reader = EventReader::new_with_config(
+            raw_xml.as_bytes(),
+            ParserConfig::new().trim_whitespace(false).ignore_comments(true),
+        );
+        for e in reader {
+            match e {
+                Ok(xml::reader::XmlEvent::StartElement { name, .. })
+                    if name.local_name.as_str() == "phrases" =>
+                {
+                    in_phrases = true;
+                }
+                Ok(xml::reader::XmlEvent::StartElement { name, attributes, .. })
+                    if in_phrases && name.local_name.as_str() == "phrase" =>
+                {
+                    current_id = attributes
+                        .iter()
+                        .find(|a| a.name.local_name.as_str() == "id")
+                        .map(|a| a.value.clone());
+                    pending = current_id
+                        .as_ref()
+                        .map(|_| Pending::Seq { buf: String::new(), stack: Vec::new() })
+                        .unwrap_or(Pending::None);
+                }
+                Ok(xml::reader::XmlEvent::StartElement { name, attributes, .. })
+                    if current_id.is_some() =>
+                {
+                    let local = name.local_name.as_str();
+                    if local == "includephrases" {
+                        // switch to alternation collection mode
+                        pending = Pending::Alt { refs: Vec::new() };
+                    } else if let Pending::Alt { refs } = &mut pending {
+                        if local == "phraseref" {
+                            if let Some(idref) = attributes
+                                .iter()
+                                .find(|a| a.name.local_name.as_str() == "idref")
+                                .map(|a| a.value.clone())
+                            {
+                                refs.push(idref);
+                            }
+                        }
+                        // raw tokens and anything else inside
+                        // <includephrases> are ignored (LT parity)
+                    } else if let Pending::Seq { buf, stack } = &mut pending {
+                        stack.push(local.to_string());
+                        let mut el = format!("<{}", local);
+                        let mut sorted: Vec<_> = attributes
+                            .iter()
+                            .map(|a| (a.name.local_name.as_str().to_string(), a.value.clone()))
+                            .collect();
+                        sorted.sort();
+                        for (k, v) in sorted {
+                            el.push_str(&format!(" {}=\"{}\"", k, esc_attr(&v)));
+                        }
+                        el.push('>');
+                        buf.push_str(&el);
+                    }
+                }
+                Ok(xml::reader::XmlEvent::EndElement { ref name }) => {
+                    let local = name.local_name.as_str();
+                    if local == "phrase" {
+                        if let Some(id) = current_id.take() {
+                            phrases.insert(id, pending);
+                        }
+                        pending = Pending::None;
+                    } else if local == "phrases" {
+                        in_phrases = false;
+                    } else if let Pending::Seq { buf, stack } = &mut pending {
+                        if let Some(open) = stack.pop() {
+                            buf.push_str(&format!("</{}>", open));
+                        }
+                    }
+                }
+                Ok(xml::reader::XmlEvent::Characters(c)) => {
+                    if let Pending::Seq { buf, .. } = &mut pending {
+                        buf.push_str(&esc_text(&c));
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => return raw_xml.to_string(),
+            }
+        }
+    }
+
+    if phrases.is_empty() {
+        return raw_xml.to_string();
+    }
+
+    // ---- resolve nested references -----------------------------------------
+    fn resolve_inner(
+        body_xml: &str,
+        resolved: &HashMap<String, Body>,
+        depth: usize,
+    ) -> Body {
+        if depth > 10 {
+            return Body::Seq(String::new());
+        }
+        // find all <phraseref idref="..."/> inside a resolved sequence and
+        // splice; alternation references promote the sequence to an Alt
+        let mut variants = vec![body_xml.to_string()];
+        loop {
+            let mut next = Vec::new();
+            let mut changed = false;
+            for v in &variants {
+                if let Some((start, end, idref)) = find_phraseref(v) {
+                    changed = true;
+                    let replacement = match resolved.get(&idref) {
+                        Some(Body::Seq(s)) => vec![s.clone()],
+                        Some(Body::Alt(alts)) => alts.clone(),
+                        None => vec![String::new()],
+                    };
+                    for r in replacement {
+                        let mut spliced = String::new();
+                        spliced.push_str(&v[..start]);
+                        spliced.push_str(&r);
+                        spliced.push_str(&v[end..]);
+                        next.push(spliced);
+                    }
+                } else {
+                    next.push(v.clone());
+                }
+            }
+            variants = next;
+            if !changed {
+                break;
+            }
+        }
+        if variants.len() == 1 {
+            Body::Seq(variants.pop().unwrap())
+        } else {
+            Body::Alt(variants)
+        }
+    }
+
+    fn resolve(
+        id: &str,
+        phrases: &HashMap<String, Pending>,
+        resolved: &mut HashMap<String, Body>,
+        depth: usize,
+    ) -> Body {
+        if depth > 10 {
+            return Body::Seq(String::new());
+        }
+        if let Some(b) = resolved.get(id) {
+            return b.clone();
+        }
+        let body = match phrases.get(id) {
+            Some(Pending::Seq { buf, .. }) => resolve_inner(buf, resolved, depth + 1),
+            Some(Pending::Alt { refs }) => {
+                let mut alts = Vec::new();
+                for r in refs {
+                    match resolve(r, phrases, resolved, depth + 1) {
+                        Body::Seq(s) => alts.push(s),
+                        Body::Alt(inner) => alts.extend(inner),
+                    }
+                }
+                if alts.is_empty() {
+                    Body::Seq(String::new())
+                } else {
+                    Body::Alt(alts)
+                }
+            }
+            Some(Pending::None) | None => Body::Seq(String::new()),
+        };
+        resolved.insert(id.to_string(), body.clone());
+        body
+    }
+
+    let mut resolved: HashMap<String, Body> = HashMap::new();
+    let ids: Vec<String> = phrases.keys().cloned().collect();
+    for id in ids {
+        resolve(&id, &phrases, &mut resolved, 0);
+    }
+
+    // ---- bail out if nothing references the definitions --------------------
+    let phrases_end = match raw_xml.find("</phrases>") {
+        Some(i) => i + "</phrases>".len(),
+        None => return raw_xml.to_string(),
+    };
+    let after = &raw_xml[phrases_end..];
+    if !after.contains("<phraseref") && !after.contains("<includephrases") {
+        return raw_xml.to_string();
+    }
+
+    // ---- clone expansion on a rule XML string ------------------------------
+    fn find_phraseref(s: &str) -> Option<(usize, usize, String)> {
+        let start = s.find("<phraseref")?;
+        let close = s[start..].find('>')? + start;
+        let tag = &s[start..=close];
+        let idref = tag
+            .split("idref=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('\"').next())
+            .map(|x| x.to_string())?;
+        // span covers a self-closing tag or an explicitly closed element
+        if tag.ends_with("/>") {
+            Some((start, close + 1, idref))
+        } else {
+            let endtag = format!("</phraseref>");
+            let end = s[close..].find(&endtag)? + close + endtag.len();
+            Some((start, end, idref))
+        }
+    }
+
+    fn find_alt_span(s: &str) -> Option<(usize, usize, Vec<String>)> {
+        // a pattern-level <includephrases> block: alternation of phraserefs
+        let start = s.find("<includephrases")?;
+        let close = s[start..].find('>')? + start;
+        let endtag = "</includephrases>";
+        let end = s[close..].find(endtag)? + close + endtag.len();
+        let inner = &s[close + 1..end - endtag.len()];
+        let mut refs = Vec::new();
+        let mut rest = inner;
+        while let Some((_, e, idref)) = find_phraseref(rest) {
+            refs.push(idref);
+            rest = &rest[e..];
+        }
+        if refs.is_empty() {
+            // includephrases with no phraserefs: expands to nothing (LT
+            // ignores raw tokens inside); treat as empty splice
+            Some((start, end, vec![String::new()]))
+        } else {
+            Some((start, end, refs))
+        }
+    }
+
+    fn expand_alternatives(
+        rule_xml: &str,
+        resolved: &HashMap<String, Body>,
+    ) -> Vec<String> {
+        let mut current = vec![rule_xml.to_string()];
+        loop {
+            let mut next = Vec::new();
+            let mut changed = false;
+            for chunk in &current {
+                // pattern-level includephrases first (it may contain
+                // phraserefs that the phraseref scan must not touch)
+                if let Some((start, end, refs)) = find_alt_span(chunk) {
+                    changed = true;
+                    let mut alts: Vec<String> = Vec::new();
+                    for r in &refs {
+                        if r.is_empty() {
+                            alts.push(String::new());
+                            continue;
+                        }
+                        match resolved.get(r) {
+                            Some(Body::Seq(s)) => alts.push(s.clone()),
+                            Some(Body::Alt(a)) => alts.extend(a.clone()),
+                            None => alts.push(String::new()),
+                        }
+                    }
+                    for a in alts {
+                        let mut c = String::new();
+                        c.push_str(&chunk[..start]);
+                        c.push_str(&a);
+                        c.push_str(&chunk[end..]);
+                        next.push(c);
+                    }
+                    continue;
+                }
+                if let Some((start, end, idref)) = find_phraseref(chunk) {
+                    changed = true;
+                    match resolved.get(&idref) {
+                        Some(Body::Seq(s)) => {
+                            let mut c = String::new();
+                            c.push_str(&chunk[..start]);
+                            c.push_str(&s);
+                            c.push_str(&chunk[end..]);
+                            next.push(c);
+                        }
+                        Some(Body::Alt(alts)) => {
+                            for a in alts {
+                                let mut c = String::new();
+                                c.push_str(&chunk[..start]);
+                                c.push_str(&a);
+                                c.push_str(&chunk[end..]);
+                                next.push(c);
+                            }
+                        }
+                        None => {
+                            let mut c = String::new();
+                            c.push_str(&chunk[..start]);
+                            c.push_str(&chunk[end..]);
+                            next.push(c);
+                        }
+                    }
+                    continue;
+                }
+                next.push(chunk.clone());
+            }
+            current = next;
+            if !changed {
+                break;
+            }
+        }
+        // drop clones whose pattern lost all elements (an empty phrase
+        // swallowed the only pattern content) — they cannot match anything
+        current
+            .into_iter()
+            .filter(|c| {
+                if let Some(ps) = c.find("<pattern") {
+                    if let Some(pe) = c[ps..].find("</pattern>") {
+                        let inner = &c[ps + 8..ps + pe];
+                        let has_elements = ["<token", "<and", "<or", "<feature", "<unify", "<marker"]
+                            .iter()
+                            .any(|t| inner.contains(t));
+                        return has_elements;
+                    }
+                }
+                true
+            })
+            .collect()
+    }
+
+    // ---- pass 2: rewrite the document, cloning rules with alternations ----
+    let reader = EventReader::new_with_config(
+        raw_xml.as_bytes(),
+        ParserConfig::new().trim_whitespace(false).ignore_comments(true),
+    );
+    let mut out = String::new();
+    let mut skip_depth = 0usize; // inside <phrases>
+    let mut rule_depth: Option<usize> = None; // inside a <rule> being buffered
+    let mut rule_buf = String::new();
+
+    for e in reader {
+        match e {
+            Ok(xml::reader::XmlEvent::StartDocument { .. }) => {
+                out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+            }
+            Ok(xml::reader::XmlEvent::EndDocument { .. }) => {}
+            Ok(xml::reader::XmlEvent::StartElement { name, attributes, namespace }) => {
+                let local = name.local_name.as_str();
+                if rule_depth.is_none() {
+                    if local == "phrases" {
+                        skip_depth += 1;
+                        continue;
+                    }
+                }
+                if skip_depth > 0 {
+                    continue;
+                }
+                let depth_mark = rule_depth.is_some();
+                let mut el = format!("<{}", local);
+                let mut sorted: Vec<_> = attributes
+                    .iter()
+                    .map(|a| (a.name.local_name.as_str().to_string(), a.value.clone()))
+                    .collect();
+                sorted.sort();
+                for (k, v) in sorted {
+                    el.push_str(&format!(" {}=\"{}\"", k, esc_attr(&v)));
+                }
+                el.push('>');
+                if local == "rule" && rule_depth.is_none() {
+                    // start buffering the rule for alternation cloning
+                    rule_depth = Some(1);
+                    rule_buf = el;
+                    continue;
+                }
+                if depth_mark {
+                    if let Some(d) = rule_depth.as_mut() {
+                        *d += 1;
+                    }
+                    rule_buf.push_str(&el);
+                } else {
+                    out.push_str(&el);
+                }
+                let _ = namespace;
+            }
+            Ok(xml::reader::XmlEvent::EndElement { name }) => {
+                let local = name.local_name.as_str();
+                if skip_depth > 0 {
+                    if local == "phrases" {
+                        skip_depth -= 1;
+                    }
+                    continue;
+                }
+                if let Some(d) = rule_depth.as_mut() {
+                    *d -= 1;
+                    if *d == 0 {
+                        // balanced close of the buffered <rule>: complete it
+                        // before cloning (the buffer has no closing tag yet)
+                        rule_buf.push_str("</rule>");
+                        rule_depth = None;
+                        for clone in expand_alternatives(&rule_buf, &resolved) {
+                            out.push_str(&clone);
+                        }
+                        rule_buf.clear();
+                        continue;
+                    }
+                    rule_buf.push_str(&format!("</{}>", local));
+                    continue;
+                }
+                out.push_str(&format!("</{}>", local));
+            }
+            Ok(xml::reader::XmlEvent::Characters(c)) => {
+                if skip_depth > 0 {
+                    continue;
+                }
+                if rule_depth.is_some() {
+                    rule_buf.push_str(&esc_text(&c));
+                } else {
+                    out.push_str(&esc_text(&c));
+                }
+            }
+            Ok(_) => {}
+            Err(_) => return raw_xml.to_string(),
+        }
+    }
+    out
+}
+
 pub fn read_rules<P: AsRef<std::path::Path>>(
     path: P,
 ) -> (
@@ -764,11 +1324,11 @@ pub fn read_rules<P: AsRef<std::path::Path>>(
             .read_to_string(&mut raw_xml)
             .unwrap();
     }
+    let raw_xml = strip_empty_antipatterns(&raw_xml);
+    let raw_xml = expand_phrases(&raw_xml);
     let regex_defs = extract_regex_rule_defs(&raw_xml);
 
-    let file = BufReader::new(file);
-
-    let sanitized = preprocess::sanitize(file, &["suggestion"]);
+    let sanitized = preprocess::sanitize(raw_xml.as_bytes(), &["suggestion"]);
     let rules = preprocess::extract_rules(sanitized.as_bytes());
 
     let mut unifications = Vec::new();
@@ -777,6 +1337,14 @@ pub fn read_rules<P: AsRef<std::path::Path>>(
         .into_iter()
         .map(|(xml, category)| {
             let mut out = Vec::new();
+
+            // rules whose pattern level only has <regexp> children are fully
+            // diverted to the regex-rule pipeline (extracted from the raw
+            // XML above); their sanitized chunk cannot deserialize as a
+            // pattern rule, so skip it here instead of warning
+            if !xml.contains("<pattern") && xml.contains("<regexp") {
+                return out;
+            }
 
             let deseralized = RuleContainer::deserialize(&mut serde_xml_rs::Deserializer::new(
                 EventReader::new(xml.as_bytes()),
@@ -923,7 +1491,7 @@ mod read_rules_tests {
         if !path.exists() {
             return; // data dir not present in some environments
         }
-        let rules = read_rules(path);
+        let (rules, _regex_defs) = read_rules(path);
         let n = rules
             .iter()
             .filter_map(|r| r.as_ref().ok())

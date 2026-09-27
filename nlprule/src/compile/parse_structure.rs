@@ -97,6 +97,7 @@ fn parse_match_attribs(
     text: Option<&str>,
     case_sensitive: bool,
     text_match_idx: Option<usize>,
+    sub_transform: Option<crate::rule::engine::composition::SubTransform>,
     info: &mut BuildInfo,
 ) -> Result<Atom, Error> {
     let mut atoms: Vec<Atom> = Vec::new();
@@ -145,6 +146,10 @@ fn parse_match_attribs(
     let mut inflect_matcher = None;
     let mut pos_matcher = None;
 
+    // a `<match>` reference with its own regexp_match/replace transform
+    // produces a literal text (the token's own regexp flag is overridden)
+    let is_regex = is_regex && !(text_match_idx.is_some() && sub_transform.is_some());
+
     if text.is_some() || text_match_idx.is_some() {
         let matcher = if is_regex {
             if let Some(text) = text {
@@ -154,7 +159,7 @@ fn parse_match_attribs(
                 return Err(Error::Unexpected("`text` must be set if regex".into()));
             }
         } else {
-            Matcher::new_string(
+            let mut matcher = Matcher::new_string(
                 text_match_idx.map_or_else(
                     || {
                         either::Left(
@@ -169,7 +174,11 @@ fn parse_match_attribs(
                 negate,
                 case_sensitive,
                 inflected,
-            )
+            );
+            if text_match_idx.is_some() {
+                matcher.sub_transform = sub_transform;
+            }
+            matcher
         };
 
         if inflected {
@@ -281,7 +290,7 @@ fn get_exceptions(
                     None
                 };
                 let mut atom =
-                    match parse_match_attribs(x, exception_text, case_sensitive, None, info) {
+                    match parse_match_attribs(x, exception_text, case_sensitive, None, None, info) {
                         Ok(atom) => atom,
                         Err(err) => return Some(Err(err)),
                     };
@@ -345,6 +354,7 @@ fn parse_token(
     };
 
     let mut token = token.clone();
+    let mut sub_transform: Option<crate::rule::engine::composition::SubTransform> = None;
     let text_match_idx = if let Some(parts) = &token.parts {
         let mut idx = None;
         for part in parts {
@@ -360,6 +370,30 @@ fn parse_token(
                         }
                         if sub.postag_regexp.is_some() {
                             token.postag_regexp = sub.postag_regexp.clone();
+                        }
+                        // `<match no="N" regexp_match="..." regexp_replace="..."
+                        // case_conversion="..."/>`: transform the referenced
+                        // token's text before comparing
+                        if (sub.regexp_match.is_some() || sub.case_conversion.is_some())
+                            && std::env::var("NLPRULE_NO_SUBTRANSFORM").is_err()
+                        {
+                            let regex = match &sub.regexp_match {
+                                Some(pattern) => Some(
+                                    crate::utils::regex::Regex::from_java_regex(
+                                        pattern.trim(),
+                                        true,
+                                        true,
+                                    )?,
+                                ),
+                                None => None,
+                            };
+                            sub_transform = Some(
+                                crate::rule::engine::composition::SubTransform {
+                                    regex,
+                                    replace: sub.regexp_replace.clone(),
+                                    case: sub.case_conversion.clone(),
+                                },
+                            );
                         }
                         break;
                     }
@@ -399,7 +433,7 @@ fn parse_token(
     }
 
     let quantifier = Quantifier::new(min, max);
-    let mut atom = parse_match_attribs(&token, text, case_sensitive, text_match_idx, info)?;
+    let mut atom = parse_match_attribs(&token, text, case_sensitive, text_match_idx, sub_transform, info)?;
     atom = AndAtom::and(vec![
         atom,
         get_exceptions(&token, case_sensitive, false, info)?,
@@ -829,11 +863,15 @@ fn parse_features(
             .equivalences
             .iter()
             .map(|equiv| {
-                parse_pos_filter(
-                    &equiv.token.postag,
-                    equiv.token.postag_regexp.as_deref(),
-                    info,
-                )
+                match &equiv.token.postag {
+                    // `<token/>` (sr): the equivalence applies to any token
+                    None => parse_pos_filter(".*", Some("yes"), info),
+                    Some(postag) => parse_pos_filter(
+                        postag,
+                        equiv.token.postag_regexp.as_deref(),
+                        info,
+                    ),
+                }
             })
             .collect()
     };

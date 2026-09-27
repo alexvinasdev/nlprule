@@ -828,6 +828,7 @@ mod composition {
                 negate,
                 case_sensitive: true, // handled by regex, should maybe be an option
                 empty_always_false,
+                sub_transform: None,
             }
         }
 
@@ -842,6 +843,7 @@ mod composition {
                 negate,
                 case_sensitive,
                 empty_always_false,
+                sub_transform: None,
             }
         }
 

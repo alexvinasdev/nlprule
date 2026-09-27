@@ -410,11 +410,123 @@ mod regex {
             }
         }
 
+        out = hoist_lookbehind_groups(&out);
+
         if full_match {
             out = format!("^(?:{})$", out);
         }
 
         Ok(out)
+    }
+
+    /// Oniguruma only allows *top-level* alternation in look-behind
+    /// (`(?<!a|bc)` is fine) but rejects a capture group wrapping the
+    /// alternation (`(?<!([a-vyz]|[a-vyz]\d))` → "invalid pattern in
+    /// look-behind"). Hoist the group out as an empty capture `()` so the
+    /// alternation becomes top-level; the empty group keeps capture
+    /// numbering stable for later `\N` references.
+    fn hoist_lookbehind_groups(regex: &str) -> String {
+        let bytes = regex.as_bytes();
+        let mut out = String::with_capacity(regex.len());
+        let mut i = 0usize;
+        while i < bytes.len() {
+            // candidates: "(?<=" or "(?<!"
+            if bytes[i] == b'('
+                && i + 4 < bytes.len()
+                && bytes[i + 1] == b'?'
+                && bytes[i + 2] == b'<'
+                && (bytes[i + 3] == b'=' || bytes[i + 3] == b'!')
+                && bytes[i + 4] == b'('
+            {
+                let group_open = i + 4;
+                if let Some(group_close) = scan_matching_paren(bytes, group_open) {
+                    let lb_close = group_close + 1;
+                    if lb_close < bytes.len() && bytes[lb_close] == b')' {
+                        let inner = &regex[group_open + 1..group_close];
+                        if has_top_level_alternation(inner) {
+                            out.push_str("()");
+                            out.push_str(if bytes[i + 3] == b'!' {
+                                "(?<!"
+                            } else {
+                                "(?<="
+                            });
+                            out.push_str(inner);
+                            out.push(')');
+                            i = lb_close + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            // copy one full UTF-8 character
+            let ch_len = utf8_char_len(bytes[i]);
+            out.push_str(&regex[i..i + ch_len]);
+            i += ch_len;
+        }
+        out
+    }
+
+    fn utf8_char_len(b: u8) -> usize {
+        if b < 0x80 {
+            1
+        } else if b >> 5 == 0b110 {
+            2
+        } else if b >> 4 == 0b1110 {
+            3
+        } else {
+            4
+        }
+    }
+
+    /// Index of the `)` matching the `(` at `open` (escapes and character
+    /// classes are respected).
+    fn scan_matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        let mut class_depth = 0usize;
+        let mut i = open;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => {
+                    i += 2;
+                    continue;
+                }
+                b'[' if class_depth == 0 => class_depth += 1,
+                b']' if class_depth > 0 => class_depth -= 1,
+                b'(' if class_depth == 0 => depth += 1,
+                b')' if class_depth == 0 => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn has_top_level_alternation(inner: &str) -> bool {
+        let bytes = inner.as_bytes();
+        let mut depth = 0usize;
+        let mut class_depth = 0usize;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => {
+                    i += 2;
+                    continue;
+                }
+                b'[' if class_depth == 0 => class_depth += 1,
+                b']' if class_depth > 0 => class_depth -= 1,
+                b'(' if class_depth == 0 => depth += 1,
+                b')' if class_depth == 0 => depth -= 1,
+                b'|' if depth == 0 && class_depth == 0 => return true,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     #[cfg(test)]
