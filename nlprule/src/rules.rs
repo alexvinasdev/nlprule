@@ -244,6 +244,38 @@ impl Rules {
         }
     }
 
+    /// Enable or disable every rule whose id (e.g. `CATEGORY/GROUP/N` or
+    /// `CATEGORY/RULE_ID`) matches the selector — pattern rules and
+    /// rule-level `<regexp>` rules. Used to activate `default="off"`
+    /// rules on demand (task-3 probe: an explicit activation must fire a
+    /// rule that stays silent by default).
+    pub fn set_enabled_matching(&mut self, selector: &Selector, enabled: bool) -> usize {
+        let mut n = 0;
+        for rule in self.rules.iter_mut() {
+            if selector.is_match(rule.id()) {
+                rule.enabled = enabled;
+                n += 1;
+            }
+        }
+        for rule in self.regex_rules.iter_mut() {
+            // sources look like `CATEGORY/GROUP/N`; parse manually into an
+            // Index (id.rs has no FromStr for it)
+            let parts: Vec<&str> = rule.source.split('/').collect();
+            if parts.len() == 3 {
+                if let Ok(index) = parts[2].parse::<usize>() {
+                    let idx = crate::rule::id::Category::new(parts[0])
+                        .join(parts[1])
+                        .join(index);
+                    if selector.is_match(&idx) {
+                        rule.enabled = enabled;
+                        n += 1;
+                    }
+                }
+            }
+        }
+        n
+    }
+
     /// Compute the suggestions for the given sentence by checking all rules.
     /// Builtin rules that are Java classes in LT (no XML): duplicated words,
     /// doubled punctuation and sentence-start casing.

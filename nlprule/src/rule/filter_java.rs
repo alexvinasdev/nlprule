@@ -103,6 +103,9 @@ pub enum JClass {
     SuggestionsRemove,
     MakeContractions,
     NumberInWord,
+    /// ca `CatalanNumberSpellerFilter`: replace the suggestion with the
+    /// matched number spelled out in Catalan words (SPELLOUT_NUMBERS).
+    CatalanNumberSpeller,
     TextToNumber {
         lang: TextNumberLang,
     },
@@ -128,6 +131,10 @@ pub enum JClass {
     MasdarToVerbAr,
     VerbToMafoulMutlaqAr,
     AdjectiveToExclamationAr,
+    /// ar `ArabicNumberPhraseFilter` (syntax_numeric_0003): number/noun
+    /// agreement check; LT 6.5 fires for dual forms followed by a
+    /// singular noun and stays silent for plain tens.
+    ArabicNumberPhrase,
     AdverbEn,
 }
 
@@ -543,6 +550,7 @@ impl JClass {
             JClass::SuggestionsRemove => suggestions_remove(ctx, replacements),
             JClass::MakeContractions => make_contractions(ctx, replacements),
             JClass::NumberInWord => number_in_word(ctx, replacements),
+            JClass::CatalanNumberSpeller => catalan_number_speller(ctx, replacements),
             JClass::TextToNumber { lang } => text_to_number(ctx, *lang, replacements),
             JClass::InterrogativeVerb => interrogative_verb(ctx, replacements),
             JClass::WordWithDeterminer => word_with_determiner(ctx, replacements),
@@ -574,6 +582,7 @@ impl JClass {
             JClass::MasdarToVerbAr => ar_masdar_to_verb(ctx, replacements),
             JClass::VerbToMafoulMutlaqAr => ar_verb_to_mafoul_mutlaq(ctx, replacements),
             JClass::AdjectiveToExclamationAr => ar_adjective_to_exclamation(ctx, replacements),
+            JClass::ArabicNumberPhrase => arabic_number_phrase(ctx, replacements),
             JClass::AdverbEn => adverb_filter_en(ctx, replacements),
             JClass::RemoveUnknownCompounds => {
                 let compound = format!(
@@ -3314,6 +3323,179 @@ fn make_contractions(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<J
     }
     let out: Vec<String> = replacements.into_iter().map(|r| fix(&r)).collect();
     keep(ctx, out)
+}
+
+
+/// ca `CatalanNumberSpellerFilter`: spell the number matched by the rule
+/// (`number_to_spell` arg, `\1` backreference) in Catalan words with the
+/// requested grammatical gender, and use it as the suggestion.
+fn catalan_number_speller(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    let number = ctx.arg("number_to_spell")?;
+    let feminine = ctx
+        .arg("gender")
+        .map_or(false, |g| g.eq_ignore_ascii_case("feminine"));
+    let spelled = spell_catalan(&number.replace('.', ""), feminine);
+    keep(ctx, vec![spelled])
+}
+
+/// Catalan cardinal numbers, Optimot style: compounds under 100 are
+/// hyphenated (`vint-i-quatre`, `trenta-dos`), hundreds too
+/// (`dos-cents`/`dues-centes`), larger groups join with spaces
+/// (`dos milions`, `mil dos-cents`).
+pub(crate) fn spell_catalan(digits: &str, feminine: bool) -> String {
+    let n: u64 = match digits.trim().parse() {
+        Ok(n) => n,
+        Err(_) => return digits.trim().to_string(),
+    };
+    spell_catalan_u64(n, feminine)
+}
+
+fn spell_catalan_u64(n: u64, feminine: bool) -> String {
+    const UNITS: [&str; 20] = [
+        "zero", "un", "dos", "tres", "quatre", "cinc", "sis", "set", "vuit", "nou", "deu",
+        "onze", "dotze", "tretze", "catorze", "quinze", "setze", "disset", "divuit", "dinou",
+    ];
+    const TENS: [(&str, u64); 8] = [
+        ("vint", 20),
+        ("trenta", 30),
+        ("quaranta", 40),
+        ("cinquanta", 50),
+        ("seixanta", 60),
+        ("setanta", 70),
+        ("vuitanta", 80),
+        ("noranta", 90),
+    ];
+    const HUNDREDS_M: [&str; 9] = [
+        "cent",
+        "dos-cents",
+        "tres-cents",
+        "quatre-cents",
+        "cinc-cents",
+        "sis-cents",
+        "set-cents",
+        "vuit-cents",
+        "nou-cents",
+    ];
+    const HUNDREDS_F: [&str; 9] = [
+        "cent",
+        "dues-centes",
+        "tres-centes",
+        "quatre-centes",
+        "cinc-centes",
+        "sis-centes",
+        "set-centes",
+        "vuit-centes",
+        "nou-centes",
+    ];
+
+    fn unit(n: u64, feminine: bool) -> String {
+        match (n, feminine) {
+            (1, true) => "una".to_string(),
+            (2, true) => "dues".to_string(),
+            _ => UNITS[n as usize].to_string(),
+        }
+    }
+
+    fn under100(n: u64, feminine: bool) -> String {
+        if n < 20 {
+            unit(n, feminine)
+        } else {
+            let (word, _) = TENS[((n / 10) - 2) as usize];
+            let r = n % 10;
+            if r == 0 {
+                word.to_string()
+            } else if n < 30 {
+                format!("{}-i-{}", word, unit(r, feminine))
+            } else {
+                format!("{}-{}", word, unit(r, feminine))
+            }
+        }
+    }
+
+    fn under1000(n: u64, feminine: bool) -> String {
+        if n < 100 {
+            return under100(n, feminine);
+        }
+        let (h, r) = (n / 100, n % 100);
+        let hundreds = if feminine { HUNDREDS_F } else { HUNDREDS_M }[(h - 1) as usize];
+        if r == 0 {
+            hundreds.to_string()
+        } else {
+            format!("{} {}", hundreds, under100(r, feminine))
+        }
+    }
+
+    if n >= 1_000_000_000 {
+        let (g, r) = (n / 1_000_000_000, n % 1_000_000_000);
+        let head = format!("{} mil milions", under1000(g, false));
+        if r == 0 {
+            head
+        } else {
+            format!("{} {}", head, spell_catalan_u64(r, feminine))
+        }
+    } else if n >= 1_000_000 {
+        let (g, r) = (n / 1_000_000, n % 1_000_000);
+        let head = if g == 1 {
+            "un mili\u{f3}".to_string()
+        } else {
+            format!("{} milions", under1000(g, false))
+        };
+        if r == 0 {
+            head
+        } else {
+            format!("{} {}", head, spell_catalan_u64(r, feminine))
+        }
+    } else if n >= 1_000 {
+        let (g, r) = (n / 1_000, n % 1_000);
+        let head = if g == 1 {
+            "mil".to_string()
+        } else {
+            format!("{} mil", under1000(g, feminine))
+        };
+        if r == 0 {
+            head
+        } else {
+            format!("{} {}", head, under1000(r, feminine))
+        }
+    } else {
+        under1000(n, feminine)
+    }
+}
+
+
+/// ar `ArabicNumberPhraseFilter`: LT's original inspects the tag of the
+/// word after the numeric phrase to validate agreement. Probing LT 6.5
+/// (`في مليونان صندوق.` fires, `في عشرون يوماً.` does not) shows the
+/// practical split: dual forms (مليونان, ألفان, مئتان, اثنان ...) are
+/// flagged before a singular noun, plain tens (عشرون ... تسعون) are not.
+fn arabic_number_phrase(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {
+    const TENS: [&str; 8] = [
+        "عشرون", "ثلاثون", "أربعون", "خمسون", "ستون", "سبعون", "ثمانون", "تسعون",
+    ];
+    let mut has_dual = false;
+    let mut has_ten = false;
+    for &idx in &ctx.matched_tokens {
+        let w = ctx.sentence.index(idx).word().as_str();
+        if TENS.iter().any(|t| w.contains(t)) {
+            has_ten = true;
+        }
+        if w.contains("مليونان")
+            || w.contains("ملياران")
+            || w.contains("بليونان")
+            || w.contains("ألفان")
+            || w.contains("مئتان")
+            || w.contains("اثنان")
+            || w.contains("اثنتان")
+            || w.contains("اثنا")
+            || w.contains("اثنتا")
+        {
+            has_dual = true;
+        }
+    }
+    if has_ten && !has_dual {
+        return None;
+    }
+    keep(ctx, replacements)
 }
 
 fn number_in_word(ctx: &mut FilterCtx, replacements: Vec<String>) -> Option<JavaOutcome> {

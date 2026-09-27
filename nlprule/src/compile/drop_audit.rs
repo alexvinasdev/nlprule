@@ -140,3 +140,49 @@ fn regex_probe3() {
         }
     }
 }
+
+#[test]
+fn regex_probe4() {
+    for (name, pat, cs, fm) in [
+        ("postag-prp", r"PRP$?", true, true),
+        ("inline-i", r"(?i)id", false, false),
+        ("inline-id", r"(?id)egos?", false, false),
+        ("surrogate", r#"[\ud83c\udc00-\ud83c\udfff]+"#, false, false),
+    ] {
+        match crate::compile::utils::from_java_regex(pat, cs, fm) {
+            Ok(s) => {
+                let r = crate::utils::regex::Regex::new(s.clone());
+                match r.try_compile() {
+                    Ok(_) => println!("{}: OK → {}", name, s),
+                    Err(e) => println!("{}: COMPILE ERR {:?} → {}", name, e, s),
+                }
+            }
+            Err(e) => println!("{}: CONV ERR {:?}", name, e),
+        }
+    }
+}
+
+#[test]
+fn regex_probe5() {
+    let pat = std::fs::read_to_string("/tmp/lp_regex.txt").unwrap();
+    let pat = pat.trim();
+    match crate::compile::utils::from_java_regex(pat, true, true) {
+        Ok(s) => {
+            let r = crate::utils::regex::Regex::new(s.clone());
+            match r.try_compile() {
+                Ok(_) => println!("lp: OK (len {})", s.len()),
+                Err(e) => {
+                    println!("lp: COMPILE ERR {:?}", e);
+                    // find suspect escapes in output
+                    for (i, c) in s.char_indices() {
+                        if c == '\\' {
+                            let seg: String = s[i..].chars().take(8).collect();
+                            if seg.contains('x') || seg.contains('u') { println!("  esc at {}: {:?}", i, seg); }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => println!("lp: CONV ERR {:?}", e),
+    }
+}

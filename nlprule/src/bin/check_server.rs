@@ -26,10 +26,20 @@ fn main() {
     if args.get(3).map_or(false, |l| l == "br") {
         tokenizer.set_breton_apostrophes(true);
     }
-    let rules = match args.get(3) {
+    let mut rules = match args.get(3) {
         Some(lang) => Rules::with_lang(&args[2], lang).unwrap(),
         None => Rules::new(&args[2]).unwrap(),
     };
+    // optional NLPRULE_ENABLE="CAT/GROUP/N,..." env var: explicitly
+    // activate `default="off"` rules for probe testing (task-3)
+    if let Ok(enable) = std::env::var("NLPRULE_ENABLE") {
+        for part in enable.split(',').filter(|x| !x.is_empty()) {
+            let selector: nlprule::rule::id::Selector =
+                core::convert::TryInto::try_into(part).unwrap();
+            let n = rules.set_enabled_matching(&selector, true);
+            eprintln!("enabled {n} rules for selector {part}");
+        }
+    }
 
     let stdin = io::stdin();
     let stdout = io::stdout();

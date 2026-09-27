@@ -317,11 +317,164 @@ mod regex {
         case_sensitive: bool,
         full_match: bool,
     ) -> Result<String, Error> {
+        let mut regex = in_regex.to_owned();
+        // decode Java surrogate pairs (`\ud83c\udc00`) to astral code
+        // points (`\u{1f000}`); regex-syntax rejects lone surrogates
+        // (de KOMMA_ZWISCHEN emoji classes)
+        {
+            let mut out = String::with_capacity(regex.len());
+            let b = regex.as_bytes();
+            let mut i = 0usize;
+            while i < b.len() {
+                if b[i] == b'\\'
+                    && i + 1 < b.len()
+                    && (b[i + 1] == b'u' || b[i + 1] == b'U')
+                    && i + 6 <= b.len()
+                {
+                    let hex = &regex[i + 2..i + 6];
+                    if let Ok(cp) = u32::from_str_radix(hex, 16) {
+                        if (0xD800..=0xDBFF).contains(&cp)
+                            && i + 12 <= b.len()
+                            && &regex[i + 6..i + 8] == "\\u"
+                        {
+                            if let Ok(lo) = u32::from_str_radix(&regex[i + 8..i + 12], 16) {
+                                if (0xDC00..=0xDFFF).contains(&lo) {
+                                    let c = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                                    // oniguruma rejects `\u{...}` escapes: emit
+                                    // the astral character literally instead
+                                    if let Some(ch) = char::from_u32(c) {
+                                        out.push(ch);
+                                    }
+                                    i += 12;
+                                    continue;
+                                }
+                            }
+                        }
+                        // lone surrogate: replace with the replacement char
+                        if (0xD800..=0xDFFF).contains(&cp) {
+                            out.push('\u{fffd}');
+                            i += 6;
+                            continue;
+                        }
+                    }
+                }
+                let ch_len = utf8_char_len(b[i]);
+                out.push_str(&regex[i..i + ch_len]);
+                i += ch_len;
+            }
+            regex = out;
+        }
+        // drop quantifiers applied to zero-width anchors: Java tolerates
+        // `PRP$?` (postag classes), oniguruma rejects it
+        {
+            let b = regex.as_bytes();
+            let mut out = String::with_capacity(regex.len());
+            let mut i = 0usize;
+            let mut class_depth = 0usize;
+            while i < b.len() {
+                let c = b[i];
+                if c == b'\\' && i + 1 < b.len() {
+                    let seq_len = if b[i + 1] == b'b' || b[i + 1] == b'B' || b[i + 1] == b'A'
+                        || b[i + 1] == b'z' || b[i + 1] == b'Z'
+                    {
+                        2
+                    } else {
+                        utf8_char_len(b[i + 1]) + 1
+                    };
+                    // `\b*`, `\A+`, ...: keep the anchor, drop quantifier(s)
+                    if seq_len == 2
+                        && class_depth == 0
+                        && i + 2 < b.len()
+                        && (b[i + 2] == b'?'
+                            || b[i + 2] == b'*'
+                            || b[i + 2] == b'+')
+                    {
+                        out.push_str(&regex[i..i + 2]);
+                        i += 2;
+                        // consume the quantifier and an optional laziness `?`
+                        i += if i + 1 < b.len() && b[i + 1] == b'?' { 2 } else { 1 };
+                        continue;
+                    }
+                    out.push_str(&regex[i..i + seq_len]);
+                    i += seq_len;
+                    continue;
+                }
+                if c == b'[' && class_depth == 0 {
+                    class_depth += 1;
+                } else if c == b']' && class_depth > 0 {
+                    class_depth -= 1;
+                } else if class_depth == 0 && (c == b'$' || c == b'^') {
+                    if i + 1 < b.len() && (b[i + 1] == b'?' || b[i + 1] == b'*' || b[i + 1] == b'+') {
+                        out.push(c as char);
+                        i += 1;
+                        // consume the quantifier and an optional laziness `?`
+                        i += if i + 1 < b.len() && b[i + 1] == b'?' { 2 } else { 1 };
+                        continue;
+                    }
+                }
+                let ch_len = utf8_char_len(c);
+                out.push_str(&regex[i..i + ch_len]);
+                i += ch_len;
+            }
+            regex = out;
+        }
+        // strip Java-only inline flags (e.g. `d` = UNIX_LINES in en
+        // ID_CASING `(?id)`): regex-syntax rejects them outright
+        {
+            let b = regex.as_bytes();
+            let mut out = String::with_capacity(regex.len());
+            let mut i = 0usize;
+            while i < b.len() {
+                if b[i] == b'(' && i + 2 < b.len() && b[i + 1] == b'?'
+                    && b[i + 2] != b'='
+                    && b[i + 2] != b'!'
+                    && b[i + 2] != b'<'
+                    && b[i + 2] != b'P'
+                {
+                    if let Some(rel) = regex[i..].find(|c| c == ')' || c == ':') {
+                        let end = i + rel;
+                        let flags = &regex[i + 2..end];
+                        // empty flags (`(?)`) are a Java no-op group —
+                        // they appear verbatim in en LIFE_LIVE/ID_CASING
+                        let is_flags = flags
+                            .chars()
+                            .all(|c| c.is_ascii_alphabetic() || c == '-');
+                        if is_flags {
+                            let kept: String = flags
+                                .chars()
+                                .filter(|c| matches!(c, 'i' | 'm' | 's' | 'x' | 'U' | 'u' | '-'))
+                                .collect();
+                            if kept.replace('-', "").is_empty() {
+                                // no usable flags left: `(?d)` → "", `(?d:` → "(?:"
+                                if b[end] == b')' {
+                                    i = end + 1;
+                                    continue;
+                                }
+                                out.push_str("(?:");
+                                i = end + 1;
+                                continue;
+                            }
+                            if kept != *flags {
+                                out.push_str("(?");
+                                out.push_str(&kept);
+                                out.push(if b[end] == b')' { ')' } else { ':' });
+                                i = end + 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                let ch_len = utf8_char_len(b[i]);
+                out.push_str(&regex[i..i + ch_len]);
+                i += ch_len;
+            }
+            regex = out;
+        }
         // pre-normalize Java-only syntax that the regex-syntax AST parser
         // rejects outright:
         // - possessive quantifiers (X*+ X++ X?+ X{n,m}+) -> greedy
         // - a dangling `(?-)` (no flags negated) -> removed
-        let mut regex = in_regex.to_owned();
+        // (regex already holds the input after the surrogate/anchor passes)
         // repeatedly de-possessivize the leftmost possessive quantifier
         loop {
             let mut possessive: Option<(usize, usize)> = None;
@@ -518,6 +671,45 @@ mod regex {
         }
 
         out = hoist_lookbehind_groups(&out);
+        // an inline flag group emptied by the case-insensitive rewrite
+        // prints as `(?)` (en ID_CASING `(?i)id` → `(?)id`): a no-op, drop it
+        while out.contains("(?)") {
+            out = out.replace("(?)", "");
+        }
+        // regex-syntax's printer emits `\xC1` byte escapes for non-ASCII
+        // literals; in oniguruma UTF-8 mode a lone `\xC1` byte is an
+        // incomplete multibyte sequence (pt LP_PARONYMS). Emit the literal
+        // character instead.
+        {
+            let b = out.as_bytes();
+            let mut res = String::with_capacity(out.len());
+            let mut i = 0usize;
+            while i < b.len() {
+                if b[i] == b'\\'
+                    && i + 4 <= b.len()
+                    && b[i + 1] == b'x'
+                    && b[i + 2].is_ascii_hexdigit()
+                    && b[i + 3].is_ascii_hexdigit()
+                    && !(i + 4 < b.len() && b[i + 4] == b'{')
+                    && !(i + 4 < b.len() && b[i + 4].is_ascii_hexdigit())
+                {
+                    let hex = &out[i + 2..i + 4];
+                    if let Ok(cp) = u8::from_str_radix(hex, 16) {
+                        if cp >= 0x80 {
+                            if let Some(c) = char::from_u32(cp as u32) {
+                                res.push(c);
+                                i += 4;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                let ch_len = utf8_char_len(b[i]);
+                res.push_str(&out[i..i + ch_len]);
+                i += ch_len;
+            }
+            out = res;
+        }
 
         if full_match {
             out = format!("^(?:{})$", out);

@@ -147,8 +147,13 @@ fn parse_match_attribs(
     let mut pos_matcher = None;
 
     // a `<match>` reference with its own regexp_match/replace transform
-    // produces a literal text (the token's own regexp flag is overridden)
-    let is_regex = is_regex && !(text_match_idx.is_some() && sub_transform.is_some());
+    // produces a literal text (the token's own regexp flag is overridden).
+    // A plain `<match>` reference under `regexp="yes"` with no own text
+    // (de DOPPELUNG_JAHRE, en REPEATED_VERBS) also behaves as a literal:
+    // LT would compile the referenced text as a regex, but the reference
+    // is a concrete word there, so matching it verbatim is equivalent.
+    let is_regex = is_regex
+        && !(text_match_idx.is_some() && (sub_transform.is_some() || text.is_none()));
 
     if text.is_some() || text_match_idx.is_some() {
         let matcher = if is_regex {
@@ -658,12 +663,18 @@ fn parse_group_tokens(
     tokens: &[structure::Token],
     case_sensitive: bool,
     info: &mut BuildInfo,
-) -> Result<(Vec<Atom>, Quantifier, Option<Part>), Error> {
+) -> Result<(Vec<Atom>, Quantifier, Vec<Part>), Error> {
     let mut atoms = Vec::new();
     let mut gap_atom: Option<Atom> = None;
     let mut gap_max = 0usize;
     let mut group_min = 1usize;
     let mut group_max = 1usize;
+    // members with their own repetition (min/max, fr A_INFINITIF
+    // `<token min="0" max="3" ...>` inside and/or): LT evaluates them as
+    // parallel subpatterns; we hoist them out of the group as sequential
+    // parts after it — the closest approximation that keeps the rule
+    // loadable and firing
+    let mut hoisted: Vec<Part> = Vec::new();
 
     for x in tokens {
         let mut parsed = parse_token(x, case_sensitive, info)?;
@@ -676,14 +687,13 @@ fn parse_group_tokens(
 
         let part = parsed.remove(0);
         if part.quantifier.max > 1 {
-            return Err(Error::Unimplemented(
-                "control flow in parallel tokens is not implemented.".into(),
-            ));
+            hoisted.push(part);
+        } else {
+            if part.quantifier.min == 0 {
+                group_min = 0;
+            }
+            atoms.push(part.atom);
         }
-        if part.quantifier.min == 0 {
-            group_min = 0;
-        }
-        atoms.push(part.atom);
 
         if let Some(gap) = parsed.pop() {
             gap_max = gap_max.max(gap.quantifier.max);
@@ -695,15 +705,19 @@ fn parse_group_tokens(
         }
     }
 
-    let gap = gap_atom.map(|atom| Part {
-        atom,
-        quantifier: Quantifier::new(0, gap_max),
-        visible: false,
-        greedy: false,
-        unify: None,
-    });
+    let mut extras: Vec<Part> = Vec::new();
+    if let Some(atom) = gap_atom {
+        extras.push(Part {
+            atom,
+            quantifier: Quantifier::new(0, gap_max),
+            visible: false,
+            greedy: false,
+            unify: None,
+        });
+    }
+    extras.extend(hoisted);
 
-    Ok((atoms, Quantifier::new(group_min, group_max), gap))
+    Ok((atoms, Quantifier::new(group_min, group_max), extras))
 }
 
 fn parse_tokens(
@@ -717,7 +731,7 @@ fn parse_tokens(
         out.extend(match token_combination {
             structure::TokenCombination::Token(token) => parse_token(token, case_sensitive, info)?,
             structure::TokenCombination::And(tokens) => {
-                let (atoms, quantifier, gap) =
+                let (atoms, quantifier, extras) =
                     parse_group_tokens(&tokens.tokens, case_sensitive, info)?;
                 let atom = AndAtom::and(atoms);
                 let mut parts = vec![Part {
@@ -727,11 +741,11 @@ fn parse_tokens(
                     visible: true,
                     unify: tokens.tokens[0].unify.as_ref().map(|x| x == "yes"),
                 }];
-                parts.extend(gap);
+                parts.extend(extras);
                 parts
             }
             structure::TokenCombination::Or(tokens) => {
-                let (atoms, quantifier, gap) =
+                let (atoms, quantifier, extras) =
                     parse_group_tokens(&tokens.tokens, case_sensitive, info)?;
                 let atom = OrAtom::or(atoms);
                 let mut parts = vec![Part {
@@ -741,7 +755,7 @@ fn parse_tokens(
                     visible: true,
                     unify: tokens.tokens[0].unify.as_ref().map(|x| x == "yes"),
                 }];
-                parts.extend(gap);
+                parts.extend(extras);
                 parts
             }
             structure::TokenCombination::Feature(_) => Vec::new(),
@@ -1019,9 +1033,12 @@ impl Rule {
                             });
 
                         if suggestion.is_some() {
-                            return Err(Error::Unexpected(
-                                "example must have one or zero markers".into(),
-                            ));
+                            // LT tolerates examples with several markers
+                            // (fr A_A_ACCENT2, CROASSE_COASSE): keep the
+                            // first marker as the error span, treat the
+                            // rest as plain text
+                            texts.push(marker.text.as_str());
+                            continue;
                         }
 
                         texts.push(marker.text.as_str());
@@ -1319,6 +1336,20 @@ fn parse_post_filter(filter: &structure::Filter, info: &mut BuildInfo) -> Result
         | "FrenchPartialPosTagFilter"
         | "NoDisambiguationFrenchPartialPosTagFilter" => {
             make_java(JClass::PartialPosTag, &["regexp", "postag_regexp"])
+        }
+        // ar syntax_numeric_0003: number/noun agreement
+        "ArabicNumberPhraseFilter" => make_java(JClass::ArabicNumberPhrase, &[]),
+        // ca grammar references the ES-variant class by its per-language
+        // name (`org.languagetool.rules.ca.FindSuggestionsEsFilter`)
+        "FindSuggestionsEsFilter" => {
+            make_java(
+                JClass::FindSuggestions { variant: FindSuggVariant::Es },
+                &["desiredPostag", "priorityPostag", "removeSuggestionsRegexp"],
+            )
+        }
+        // ca SPELLOUT_NUMBERS: suggestion = the number spelled in words
+        "CatalanNumberSpellerFilter" => {
+            make_java(JClass::CatalanNumberSpeller, &[])
         }
         "FindSuggestionsFilter" => {
             let variant = match package.as_str() {
@@ -1764,9 +1795,11 @@ impl DisambiguationRule {
                         }
                         structure::ExamplePart::Marker(marker) => {
                             if char_span.is_some() {
-                                return Err(Error::Unexpected(
-                                    "example must have one or zero markers".into(),
-                                ));
+                                // several markers: keep the first span,
+                                // treat the rest as plain text
+                                texts.push(marker.text.as_str());
+                                char_length += marker.text.chars().count();
+                                continue;
                             }
 
                             texts.push(marker.text.as_str());
