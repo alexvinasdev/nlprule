@@ -367,6 +367,141 @@ pub(crate) fn priority_for_id(lang: Option<&str>, id: &str) -> i32 {
             }
             0
         }
+        "ca" => {
+            // Catalan.getPriorityForId (110 entries)
+            if matches!(id, "CONFUSIONS2" | "DEU_NI_DO"
+            ) {
+                return 80;
+            }
+            if matches!(id, "FER_LOGIN" | "L_OK"
+            ) {
+                return 70;
+            }
+            if matches!(id, "INCORRECT_EXPRESSIONS" | "PERSONATGES_FAMOSOS" | "CONEIXO_CONEC" | "COMETES_INCORRECTES" | "OFERTAR_OFERIR"
+            ) {
+                return 50;
+            }
+            if matches!(id, "DESDE_UN" | "MOTS_NO_SEPARATS" | "REPETEAD_ELEMENTS" | "ESPERANT_US_AGRADI" | "LO_NEUTRE" | "ESPAIS_SOBRANTS"
+            ) {
+                return 40;
+            }
+            if matches!(id, "ELA_GEMINADA" | "CONFUSIONS_PRONOMS_FEBLES" | "PRONOMS_FEBLES_TEMPS_VERBAL"
+            ) {
+                return 35;
+            }
+            if matches!(id, "CA_SPLIT_WORDS" | "ET_AL" | "PRONOMS_FEBLES_COLLOQUIALS" | "CONCORDANCES_CASOS_PARTICULARS" | "GERUNDI_PERD_T" | "CONFUSIONS"
+                | "PRONOMS_FEBLES_DARRERE_VERB" | "VERBS_NO_INCOATIUS" | "PUNT_LLETRA"
+            ) {
+                return 30;
+            }
+            if matches!(id, "REEMPRENDRE" | "INCORRECT_WORDS_IN_CONTEXT"
+            ) {
+                return 28;
+            }
+            if id == "PRONOMS_FEBLES_SOLTS2" {
+                return 26;
+            }
+            if matches!(id, "ES_UNKNOWN" | "HAVER_SENSE_HAC" | "HA_A" | "PASSAT_PERIFRASTIC"
+            ) {
+                return 25;
+            }
+            if matches!(id, "CONFUSIONS_ACCENT" | "CONFUSIO_PASSAT_INFINITIU" | "DIACRITICS" | "CAP_GENS" | "MOTS_SENSE_GUIONETS" | "ORDINALS"
+                | "SUPER" | "PRONOM_FEBLE_HI"
+            ) {
+                return 20;
+            }
+            if id == "HAVER_PARTICIPI_HAVER_IMPERSONAL" {
+                return 15;
+            }
+            if matches!(id, "CONCORDANCES_NUMERALS_DUES" | "FALTA_CONDICIONAL" | "ACCENTUATION_CHECK" | "CONCORDANCA_GRIS" | "A_PER" | "CONCORDANCES_NUMERALS"
+                | "COMMA_IJ" | "AVIS" | "CAP_ELS_CAP_ALS" | "CASING" | "DOS_ARTICLES" | "MOTS_GUIONET"
+                | "SELS_EN_VA" | "CONCORDANCES_NOUNS_PRIORITY" | "PREFIXOS_SENSE_GUIONET_EN_DICCIONARI" | "ZERO_O" | "URL"
+            ) {
+                return 10;
+            }
+            if matches!(id, "CONCORDANCES_DET_NOM" | "CONCORDANCES_DET_ADJ" | "CONCORDANCES_DET_POSSESSIU" | "PASSAR_SE" | "DET_GN" | "SPELLING"
+                | "APOSTROF_ANYS" | "VENIR_NO_REFLEXIU" | "DEUS_SEUS" | "SON_BONIC" | "ACCENTUACIO" | "L_NO_APOSTROFA"
+                | "L_D_N_NO_S_APOSTROFEN"
+            ) {
+                return 5;
+            }
+            if id == "CONTRACCIONS" {
+                return 0;
+            }
+            if id == "CASING_START" {
+                return -5;
+            }
+            if matches!(id, "CA_WORD_COHERENCY" | "CA_WORD_COHERENCY_VALENCIA" | "ARTICLE_TOPONIM_MIN" | "PEL_QUE" | "COMMA_LOCUTION" | "REGIONAL_VERBS"
+                | "PRONOMS_FEBLES_SOLTS" | "CONCORDANCA_PRONOMS_CATCHALL"
+            ) {
+                return -10;
+            }
+            if id == "AGREEMENT_POSTPONED_ADJ" {
+                return -15;
+            }
+            if matches!(id, "FALTA_COMA_FRASE_CONDICIONAL" | "ESPAIS_QUE_FALTEN_PUNTUACIO" | "VERBS_NOMSPROPIS"
+            ) {
+                return -20;
+            }
+            if id == "VERBS_PRONOMINALS" {
+                return -25;
+            }
+            if id == "PORTO_LLEGINT" {
+                return -30;
+            }
+            if id == "PORTA_UNA_HORA" {
+                return -40;
+            }
+            if matches!(id, "REPETITIONS_STYLE" | "MUNDAR"
+            ) {
+                return -50;
+            }
+            if id == "NOMBRES_ROMANS" {
+                return -90;
+            }
+            if matches!(id, "TASCAS_TASQUES" | "PREPOSICIONS_MINUSCULA" | "SUGGERIMENTS_LE"
+            ) {
+                return -97;
+            }
+            if id == "MORFOLOGIK_RULE_CA_ES" {
+                return -100;
+            }
+            if matches!(id, "EXIGEIX_ACCENTUACIO_VALENCIANA" | "APOSTROFACIO_MOT_DESCONEGUT"
+            ) {
+                return -120;
+            }
+            if matches!(id, "PHRASE_REPETITION" | "SUBSTANTIUS_JUNTS"
+            ) {
+                return -150;
+            }
+            if id == "REPETITION_ADJ_N_ADJ" {
+                return -155;
+            }
+            if matches!(id, "FALTA_ELEMENT_ENTRE_VERBS" | "PUNT_FINAL" | "PUNCTUATION_PARAGRAPH_END"
+            ) {
+                return -200;
+            }
+            if matches!(id, "CA_END_PARAGRAPH_PUNCTUATION" | "DICENDI_QUE"
+            ) {
+                return -250;
+            }
+            if matches!(id, "UPPERCASE_SENTENCE_START" | "MAJUSCULA_IMPROBABLE" | "ELA_GEMINADA_WIKI"
+            ) {
+                return -500;
+            }
+            0
+        }
+        "be" => {
+            // Belarusian.getPriorityForId
+            match id {
+                "RUSSIAN_SIMPLE_REPLACE_RULE" => 10,
+                "BELARUSIAN_SPECIFIC_CASE" => 9,
+                "Word_root_repeat" => -1,
+                "PUNCT_DPT_2" => -2,
+                "TOO_LONG_PARAGRAPH" => -15,
+                _ => 0,
+            }
+        }
         "pt" => {
             if id.starts_with("MORFOLOGIK_RULE") {
                 return -50;
