@@ -202,6 +202,7 @@ pub struct Category {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct XmlString {
+    #[serde(default)]
     pub text: String,
 }
 
@@ -349,6 +350,11 @@ pub enum TokenPart {
 #[serde(deny_unknown_fields)]
 pub struct Sub {
     pub no: String,
+    /// `<match no="N" postag="..." postag_regexp="yes"/>` inside a pattern
+    /// token: the current token must additionally match this postag (the
+    /// text still comes from the referenced token).
+    pub postag: Option<String>,
+    pub postag_regexp: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

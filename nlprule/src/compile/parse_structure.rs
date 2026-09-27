@@ -344,15 +344,30 @@ fn parse_token(
         None
     };
 
+    let mut token = token.clone();
     let text_match_idx = if let Some(parts) = &token.parts {
-        match parts.iter().find_map(|x| match x {
-            structure::TokenPart::Sub(sub) => Some(sub.no.parse::<usize>().map(|x| x + 1)),
-            _ => None,
-        }) {
-            None => None,
-            Some(Ok(x)) => Some(x),
-            Some(Err(err)) => return Err(err.into()),
+        let mut idx = None;
+        for part in parts {
+            if let structure::TokenPart::Sub(sub) = part {
+                match sub.no.parse::<usize>() {
+                    Ok(no) => {
+                        idx = Some(no + 1);
+                        // `<match no="N" postag="..."/>`: the current token
+                        // must also match the match element's postag (the
+                        // text comes from the referenced token)
+                        if sub.postag.is_some() {
+                            token.postag = sub.postag.clone();
+                        }
+                        if sub.postag_regexp.is_some() {
+                            token.postag_regexp = sub.postag_regexp.clone();
+                        }
+                        break;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
         }
+        idx
     } else {
         None
     };
@@ -384,10 +399,10 @@ fn parse_token(
     }
 
     let quantifier = Quantifier::new(min, max);
-    let mut atom = parse_match_attribs(token, text, case_sensitive, text_match_idx, info)?;
+    let mut atom = parse_match_attribs(&token, text, case_sensitive, text_match_idx, info)?;
     atom = AndAtom::and(vec![
         atom,
-        get_exceptions(token, case_sensitive, false, info)?,
+        get_exceptions(&token, case_sensitive, false, info)?,
     ]);
 
     parts.push(Part {
@@ -406,7 +421,7 @@ fn parse_token(
         };
 
         parts.push(Part {
-            atom: get_exceptions(token, case_sensitive, true, info)?,
+            atom: get_exceptions(&token, case_sensitive, true, info)?,
             quantifier: Quantifier::new(0, to_skip),
             visible: false,
             greedy: false,
