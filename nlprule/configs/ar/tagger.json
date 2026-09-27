@@ -4,5 +4,6 @@
     "extra_tags": [
         "SENT_START"
     ],
-    "retain_last": true
+    "retain_last": true,
+    "arabic_stemming": true
 }

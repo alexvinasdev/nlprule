@@ -56,17 +56,25 @@ def main():
                 ((literal_postags(disambig) | literal_postags(grammar)) - known) | existing
             )
 
+        existing_tagger = {}
+        if (out / "tagger.json").exists():
+            try:
+                existing_tagger = json.loads((out / "tagger.json").read_text())
+            except Exception:
+                existing_tagger = {}
+        tagger_cfg = {
+            "use_compound_split_heuristic": lang in CASED_LANGUAGES,
+            "always_add_lower_tags": lang not in CASED_LANGUAGES,
+            "extra_tags": extra,
+            "retain_last": True,
+        }
+        # hand-tuned settings not derived here survive a regen (e.g. ar's
+        # arabic_stemming was silently dropped by an earlier run)
+        for key in ("arabic_stemming",):
+            if key in existing_tagger:
+                tagger_cfg[key] = existing_tagger[key]
         (out / "tagger.json").write_text(
-            json.dumps(
-                {
-                    "use_compound_split_heuristic": lang in CASED_LANGUAGES,
-                    "always_add_lower_tags": lang not in CASED_LANGUAGES,
-                    "extra_tags": extra,
-                    "retain_last": True,
-                },
-                indent=4,
-            )
-            + "\n"
+            json.dumps(tagger_cfg, indent=4) + "\n"
         )
         (out / "rules.json").write_text(
             json.dumps({"allow_errors": True, "ignore_ids": []}, indent=4) + "\n"
