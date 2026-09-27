@@ -317,6 +317,9 @@ pub(crate) fn priority_for_id(lang: Option<&str>, id: &str) -> i32 {
         Some(l) => l,
         None => return 0,
     };
+    // suggestion sources are "CATEGORY/RULE_ID[/match]" (built-ins are
+    // bare): normalize to the rule id so language priority maps match
+    let id = id.split('/').nth(1).unwrap_or(id);
     match lang {
         "en" => {
             if id.starts_with("CONFUSION_RULE") {

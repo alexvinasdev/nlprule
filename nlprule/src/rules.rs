@@ -122,14 +122,24 @@ fn clean_overlapping(suggestions: Vec<Suggestion>, lang: Option<&str>) -> Vec<Su
         }
 
         // overlapping: CleanOverlappingFilter semantics — language priority
-        // (getPriorityForId) first; on tie the longer error; on tie the later
-        // one. Never summed: a -1 rule loses to any 0-priority match however
-        // long it is (pl ZDANIA_ZLOZONE vs UPPERCASE_SENTENCE_START).
         let priority_of = |sugg: &Suggestion| -> isize {
             crate::rule::priorities::priority_for_id(lang, sugg.source()) as isize
         };
         let mut cur_priority = priority_of(&rule_match);
         let mut prev_priority = priority_of(&prev);
+        if std::env::var("NLPRULE_DEBUG_OVERLAP").is_ok() {
+            eprintln!(
+                "[OVL] cur={:?}[{},{}]p{} prev={:?}[{},{}]p{}",
+                rule_match.source(),
+                cur_from,
+                cur_to,
+                cur_priority,
+                prev.source(),
+                prev_from,
+                prev_to,
+                prev_priority
+            );
+        }
         if cur_priority == prev_priority {
             // take the longest error:
             cur_priority = (cur_to - cur_from) as isize;
@@ -308,7 +318,19 @@ impl Rules {
         if tokens.len() < 2 {
             return out;
         }
-        // WORD_REPEAT_RULE: adjacent identical words
+        // WORD_REPEAT_RULE: adjacent identical words. LT languages that
+        // subclass WordRepeatRule report it under their own id (the HTTP
+        // API exposes the subclass rule id).
+        let repeat_rule_id = match self.builtin_lang.as_deref() {
+            Some("de") => "GERMAN_WORD_REPEAT_RULE",
+            Some("es") => "SPANISH_WORD_REPEAT_RULE",
+            Some("fr") => "FRENCH_WORD_REPEAT_RULE",
+            Some("uk") => "UKRAINIAN_WORD_REPEAT_RULE",
+            Some("ca") => "CATALAN_WORD_REPEAT_RULE",
+            Some("pt") => "PORTUGUESE_WORD_REPEAT_RULE",
+            Some("it") => "ITALIAN_WORD_REPEAT_RULE",
+            _ => "WORD_REPEAT_RULE",
+        };
         for pair in tokens.windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let ta = a.word().as_str();
@@ -316,22 +338,24 @@ impl Rules {
             if !b.has_space_before() || ta.len() < 2 {
                 continue;
             }
+            // GermanWordRepeatRule.ignore: case-specific exceptions
+            let german_ignore = self.builtin_lang.as_deref() == Some("de")
+                && matches!((ta, tb), ("Sie", "sie") | ("sie", "Sie") | ("Waren", "waren") | ("waren", "Waren"));
             if ta.chars().all(char::is_alphabetic)
                 && ta.eq_ignore_ascii_case(tb)
+                && !german_ignore
                 && !matches!(ta.to_lowercase().as_str(), "that" | "had")
             {
-                let text = sentence.text();
                 let span = Span::from_positions(a.span().start(), a.span().end());
                 let word = ta;
                 out.push(Suggestion::new(
-                    "WORD_REPEAT_RULE".to_string(),
+                    repeat_rule_id.to_string(),
                     format!(
                         "Possible typo: you repeated a word",
                     ),
                     span,
                     vec![word.to_string()],
                 ));
-                let _ = text;
                 break;
             }
         }
@@ -419,28 +443,30 @@ impl Rules {
 
 
         let n_pattern_rules = self.rules.len();
-        let en_mode = matches!(self.builtin_lang.as_deref(), Some("en") | Some("ar"));
         output.sort_by(|(ia, a), (ib, b)| {
             a.span()
                 .char()
                 .start
                 .cmp(&b.span().char().start)
-                // at equal starts the built-ins (appended last, sorted
-                // first) come first, so a pattern or speller match at the
-                // same span replaces them; among pattern rules the
-                // later-in-grammar match sorts first and survives the
-                // overlap walk (matches the server on fr/de/ca/es). For
-                // English the grammar order is kept so the later rule wins
-                // an equal-span tie (APOSTROPHE_UPPERCASE_LETTER over
-                // APOS_RE), which the priority map does not separate.
+                // tiers preserve the validated cross-family outcomes:
+                // text-level built-ins first (a pattern or speller match at
+                // the same span replaces them, as on the server), then
+                // rule-level <regexp> rules, then pattern rules ascending
+                // (grammar order) — among pattern rules the later rule
+                // survives an equal-span tie like LT's stable sort does.
                 .then_with(|| {
-                    if en_mode {
-                        (*ia >= n_pattern_rules)
-                            .cmp(&(*ib >= n_pattern_rules))
-                            .then_with(|| ia.cmp(ib))
-                    } else {
-                        ib.cmp(ia)
-                    }
+                    let rank = |i: usize| {
+                        if i < n_pattern_rules {
+                            2
+                        } else if i >= n_pattern_rules + 1_000_000 {
+                            1
+                        } else {
+                            0
+                        }
+                    };
+                    rank(*ia)
+                        .cmp(&rank(*ib))
+                        .then_with(|| ia.cmp(ib))
                 })
         });
 
