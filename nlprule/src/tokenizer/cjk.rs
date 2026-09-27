@@ -107,16 +107,30 @@ fn jieba_ranges(text: &str, offset: usize) -> Vec<(usize, usize)> {
 
     static JIEBA: Lazy<Jieba> = Lazy::new(|| JIEBA_HANLP.clone());
 
-    // cut without HMM: out-of-vocabulary runs are split per character,
-    // mirroring HanLP's unknown-word handling that LT's zh rules expect
-    JIEBA
-        .cut(text, false)
+    // LT's HanLP segments these wrong-spelling compounds per character
+    // (the zh tone-pair rules are written for that: `一|如|继|往`,
+    // `亚|州`), but the jieba dictionary keeps them as words, so the
+    // patterns never see the single-character tokens. Deterministic
+    // post-split of the affected ranges.
+    const FORCE_CHAR_SPLIT: [&str; 6] = ["亚州", "州际", "一如", "继往", "既往", "九洲"];
+
+    let mut ranges = Vec::new();
+    let mut pos = offset;
+    for word in JIEBA.cut(text, false) {
+        let start = pos;
+        pos += word.len();
+        if FORCE_CHAR_SPLIT.contains(&word) {
+            for (i, c) in word.char_indices() {
+                let s = start + i;
+                let e = s + c.len_utf8();
+                ranges.push((s, e));
+            }
+        } else {
+            ranges.push((start, pos));
+        }
+    }
+    ranges
         .into_iter()
-        .scan(offset, |pos, word| {
-            let start = *pos;
-            *pos += word.len();
-            Some((start, start + word.len()))
-        })
         .filter(|(start, end)| start < end)
         .collect()
 }
