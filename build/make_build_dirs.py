@@ -299,6 +299,45 @@ def simple_replace_rules(tables, lang=None):
             )
     return "\n".join(parts)
 
+SPELLER_DICTS = {
+    "ca": [("catalan-pos-dict.jar", "ca/ca-ES_spelling")],
+    "de": [(None, "de/hunspell/de_DE")],  # loose in the dist
+    "nl": [("dutch-pos-dict.jar", "nl/spelling/nl_NL")],
+    "pt": [("portuguese-pos-dict.jar", "pt/spelling/pt-PT-90")],
+    "ru": [(None, "ru/hunspell/ru_RU")],
+    "pl": [(None, "pl/hunspell/pl_PL")],
+    "it": [(None, "it/hunspell/it_IT")],
+    "br": [(None, "br/hunspell/br_FR")],
+    "gl": [(None, "gl/galician")],
+    "ga": [("languagetool-ga-dicts.jar", "ga/hunspell/ga_IE")],
+}
+
+# plain-text word lists added to the speller vocabulary per language
+SPELLER_LISTS = {
+    "en": ["en/hunspell/spelling.txt", "en/hunspell/ignore.txt"],
+    # German: LT's ignore/spelling/added lists plus the hunspell .dic word
+    # column (the morfologik de_DE.dict dump misses plain-form words like
+    # "baff", "online", "US"). spelling_merged.txt = accepted-but-recommend.
+    "de": [
+        "de/hunspell/spelling.txt",
+        "de/hunspell/ignore.txt",
+        "de/hunspell/spelling_merged.txt",
+        "de/hunspell/spelling_custom.txt",
+        "de/added.txt",
+        "de/hunspell/de_DE.dic",
+    ],
+    "fr": ["fr/added.txt"],
+    "es": ["es/hunspell/spelling.txt", "es/hunspell/ignore.txt"],
+    "ca": ["ca/spelling.txt", "ca/added.txt", "ca/hunspell/ignore.txt"],
+    "nl": ["nl/added.txt"],
+    "ru": ["ru/hunspell/spelling.txt", "ru/hunspell/ignore.txt", "ru/added.txt"],
+    "pt": [],
+    "pl": ["pl/hunspell/ignore.txt"],
+    "it": ["it/hunspell/spelling.txt", "it/hunspell/ignore.txt"],
+    "gl": ["gl/added.txt"],
+}
+
+
 def _words_from_lines(text):
     words = set()
     for line in text.splitlines():
