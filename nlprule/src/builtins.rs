@@ -441,6 +441,9 @@ pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
     if lang == Some("es") {
         out.push("ES_QUESTION_MARK");
     }
+    if lang == Some("fr") {
+        out.push("FRENCH_WHITESPACE");
+    }
     match lang {
         Some("en") => out.push("EN_UNPAIRED_QUOTES"),
         Some("es") => out.push("ES_UNPAIRED_BRACKETS"),
@@ -877,6 +880,75 @@ pub(crate) fn es_question_mark(sentence: &Sentence, lang: Option<&str>) -> Vec<S
         Span::new(start.byte..end.byte, start.char..end.char),
         vec![replacement],
     )]
+}
+
+/// LT `FrenchQuestionWhitespaceRule` family (id `FRENCH_WHITESPACE`):
+/// French punctuation !, ?, ;, : must be preceded by a (narrow)
+/// non-breaking space. Fires when there is NO space at all; the
+/// suggestion inserts U+202F before !/?/; and U+00A0 before `:`.
+pub(crate) fn french_whitespace(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("fr") {
+        return Vec::new();
+    }
+    let tokens: Vec<_> = sentence.iter().collect();
+    let text = sentence.text();
+    let mut out = Vec::new();
+    for i in 1..tokens.len() {
+        let punct = tokens[i].word().as_str();
+        let space = match punct {
+            "!" | "?" | ";" => '\u{202f}',
+            ":" | "\u{bb}" => '\u{a0}',
+            _ => continue,
+        };
+        // only fire when the punctuation is glued to the previous word
+        let bs_prev_end = tokens[i - 1].span().end().byte;
+        let bs_start = tokens[i].span().start().byte;
+        if bs_start != bs_prev_end {
+            continue;
+        }
+        let prev_word = tokens[i - 1].word().as_str();
+        // sentence-start punctuation and numbers ("10:30") are excluded
+        if prev_word.is_empty()
+            || prev_word.chars().any(|c| c.is_ascii_digit())
+            || punct == ":" && prev_word.chars().all(|c| !c.is_alphabetic())
+        {
+            continue;
+        }
+        let _ = text;
+        let start = tokens[i - 1].span().start();
+        let end = tokens[i].span().end();
+        let replacement = format!("{}{}{}", prev_word, space, punct);
+        out.push(Suggestion::new(
+            "FRENCH_WHITESPACE".to_string(),
+            "Espace insécable devant la ponctuation.".to_string(),
+            Span::new(start.byte..end.byte, start.char..end.char),
+            vec![replacement],
+        ));
+    }
+    // opening guillemet « glued to the following word: insert U+00A0 after
+    for i in 0..tokens.len().saturating_sub(1) {
+        if tokens[i].word().as_str() != "\u{ab}" {
+            continue;
+        }
+        let glued = tokens[i + 1].span().start().byte == tokens[i].span().end().byte;
+        if !glued {
+            continue;
+        }
+        let next_word = tokens[i + 1].word().as_str();
+        if next_word.is_empty() || next_word.chars().any(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let start = tokens[i].span().start();
+        let end = tokens[i + 1].span().end();
+        let replacement = format!("\u{ab}\u{a0}{}", next_word);
+        out.push(Suggestion::new(
+            "FRENCH_WHITESPACE".to_string(),
+            "Espace insécable après le guillemet.".to_string(),
+            Span::new(start.byte..end.byte, start.char..end.char),
+            vec![replacement],
+        ));
+    }
+    out
 }
 
 /// LT ar-specific whitespace rules: `ARABIC_QM_WHITESPACE` (space before
