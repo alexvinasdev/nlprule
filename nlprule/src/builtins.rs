@@ -438,6 +438,9 @@ pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
         out.push("ARABIC_QM_WHITESPACE");
         out.push("ARABIC_SC_WHITESPACE");
     }
+    if lang == Some("es") {
+        out.push("ES_QUESTION_MARK");
+    }
     match lang {
         Some("en") => out.push("EN_UNPAIRED_QUOTES"),
         Some("es") => out.push("ES_UNPAIRED_BRACKETS"),
@@ -834,6 +837,44 @@ pub(crate) fn morfologik_spelling(
 /// LT `DoublePunctuationRule`: two consecutive equal punctuation marks
 /// ("..", ",,"). "..." (ellipsis) and numeric contexts are allowed; fr also
 /// allows "..," "?.." "!..".
+/// LT `SpanishQuestionMarkDeletionRule`-family behavior (id
+/// `ES_QUESTION_MARK`): a question/exclamation sentence must open with
+/// ¿/¡. Flags the first word with a `¿`/`¡`-prefixed suggestion.
+pub(crate) fn es_question_mark(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("es") {
+        return Vec::new();
+    }
+    let tokens: Vec<_> = sentence.iter().collect();
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+    let last = tokens[tokens.len() - 1].word().as_str();
+    let opener = if last.ends_with('?') {
+        '\u{bf}' // ¿
+    } else if last.ends_with('!') {
+        '\u{a1}' // ¡
+    } else {
+        return Vec::new();
+    };
+    let first = tokens[0].word().as_str();
+    if first.starts_with('\u{bf}') || first.starts_with('\u{a1}') {
+        return Vec::new();
+    }
+    // numbers and non-words at sentence start: LT's rule needs a word
+    if !first.chars().next().map_or(false, |c| c.is_alphabetic()) {
+        return Vec::new();
+    }
+    let start = tokens[0].span().start();
+    let end = tokens[0].span().end();
+    let replacement = format!("{}{}", opener, first);
+    vec![Suggestion::new(
+        "ES_QUESTION_MARK".to_string(),
+        "Falta el signo de apertura.".to_string(),
+        Span::new(start.byte..end.byte, start.char..end.char),
+        vec![replacement],
+    )]
+}
+
 /// LT ar-specific whitespace rules: `ARABIC_QM_WHITESPACE` (space before
 /// the Arabic question mark ؟) and `ARABIC_SC_WHITESPACE` (space before
 /// the Arabic semicolon ؛). Probed on LT 6.5: both flag the whitespace

@@ -351,6 +351,10 @@ impl Rules {
             sentence,
             self.builtin_lang.as_deref(),
         ));
+        out.extend(crate::builtins::es_question_mark(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
         let tokens: Vec<_> = sentence.iter().collect();
         // SimpleReplaceRule phrase table (nl): case-sensitive multiword
         // lookup with sub-rule ids derived from the wrong phrase
