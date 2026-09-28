@@ -394,8 +394,55 @@ pub(crate) fn builtin_ids(
         out.push("KM_SPACE_BEFORE_CONJUNCTION".to_string());
     }
     out.push(repeat_rule_id(lang).to_string());
+    for id in text_family_ids(lang) {
+        out.push(id.to_string());
+    }
     if let Some(table) = filter_data.simple_replace.as_ref() {
         out.push(table.prefix.clone());
+    }
+    out
+}
+
+/// Ids of the text-level families (`DOUBLE_PUNCTUATION`, `WHITESPACE_RULE`,
+/// `COMMA_PARENTHESIS_WHITESPACE`, `UNPAIRED_BRACKETS`/`EN_UNPAIRED_QUOTES`)
+/// that LT 6.5 runs for this language at the default level — must mirror
+/// the gate tables of the four ported functions.
+pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    const DOUBLE: &[&str] = &[
+        "ca", "es", "en", "fr", "pt", "ru", "pl", "it", "br", "eo", "ga",
+        "sk", "sl", "be", "el", "ro", "ta", "tl", "ast", "crh", "gl",
+    ];
+    const WHITESPACE: &[&str] = &[
+        "ca", "es", "ar", "ru", "uk", "pl", "it", "br", "eo", "ga", "sv",
+        "da", "sk", "sl", "be", "el", "fa", "ro", "ta", "crh", "gl",
+    ];
+    const COMMA: &[&str] = &[
+        "ca", "es", "en", "de", "fr", "ar", "ru", "uk", "pl", "it", "br",
+        "eo", "ga", "sv", "da", "sk", "sl", "be", "el", "fa", "ro", "tl",
+        "ast", "crh",
+    ];
+    if lang.map_or(false, |l| DOUBLE.contains(&l)) {
+        out.push("DOUBLE_PUNCTUATION");
+    }
+    if lang.map_or(false, |l| WHITESPACE.contains(&l)) {
+        out.push("WHITESPACE_RULE");
+    }
+    if lang.map_or(false, |l| COMMA.contains(&l)) {
+        out.push("COMMA_PARENTHESIS_WHITESPACE");
+    }
+    match lang {
+        Some("en") => out.push("EN_UNPAIRED_QUOTES"),
+        Some(l)
+            if matches!(
+                l,
+                "ca" | "ar" | "pt" | "gl" | "eo" | "ga" | "sv" | "da" | "sl" | "tl" | "ast"
+                    | "de" | "fr" | "it" | "ro" | "sk"
+            ) =>
+        {
+            out.push("UNPAIRED_BRACKETS");
+        }
+        _ => {}
     }
     out
 }
@@ -694,5 +741,267 @@ pub(crate) fn morfologik_spelling(
         ));
     }
 
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Text-level builtin families ported from LT 6.5 (task-4).
+// Language gating follows what the local LT 6.5 server fires at the
+// default level (probed 2026-09-28, see delta_log).
+// ---------------------------------------------------------------------------
+
+/// LT `DoublePunctuationRule`: two consecutive equal punctuation marks
+/// ("..", ",,"). "..." (ellipsis) and numeric contexts are allowed; fr also
+/// allows "..," "?.." "!..".
+pub(crate) fn double_punctuation(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    const LANGS: &[&str] = &[
+        "ca", "es", "en", "fr", "pt", "ru", "pl", "it", "br", "eo", "ga",
+        "sk", "sl", "be", "el", "ro", "ta", "tl", "ast", "crh", "gl",
+    ];
+    let lang = match lang {
+        Some(l) if LANGS.contains(&l) => l,
+        _ => return Vec::new(),
+    };
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    for i in 1..tokens.len() {
+        let token = tokens[i].word().as_str();
+        let prev = tokens[i - 1].word().as_str();
+        let prev_prev = if i >= 2 {
+            tokens[i - 2].word().as_str()
+        } else {
+            ""
+        };
+        let next = tokens.get(i + 1).map(|t| t.word().as_str()).unwrap_or("");
+        let flagged = match token {
+            "," | ";" => token == prev,
+            "." if prev == "." => {
+                // "..." and longer runs of dots are an ellipsis
+                !(prev_prev == "." || next == ".")
+            }
+            _ => false,
+        };
+        if !flagged {
+            continue;
+        }
+        // numeric contexts like "1.2" / "1,000": never flag next to digits
+        let prev_prev_digit = prev_prev.chars().any(|c| c.is_ascii_digit());
+        let next_digit = next.chars().any(|c| c.is_ascii_digit());
+        if prev_prev_digit || next_digit {
+            continue;
+        }
+        // FrenchDoublePunctuationRule exceptions
+        if lang == "fr" && matches!(next, ",") {
+            continue;
+        }
+        let start = tokens[i - 1].span().start();
+        let end = tokens[i].span().end();
+        out.push(Suggestion::new(
+            "DOUBLE_PUNCTUATION".to_string(),
+            "Double punctuation.".to_string(),
+            Span::new(start.byte..end.byte, start.char..end.char),
+            vec![token.to_string()],
+        ));
+    }
+    out
+}
+
+/// LT `MultipleWhitespaceRule` (id `WHITESPACE_RULE`): a run of 2+ spaces
+/// between two non-whitespace tokens.
+pub(crate) fn multiple_whitespace(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    const LANGS: &[&str] = &[
+        "ca", "es", "ar", "ru", "uk", "pl", "it", "br", "eo", "ga", "sv",
+        "da", "sk", "sl", "be", "el", "fa", "ro", "ta", "crh", "gl",
+    ];
+    if !lang.map_or(false, |l| LANGS.contains(&l)) {
+        return Vec::new();
+    }
+    // the tokenizer does not emit whitespace tokens: runs of spaces live in
+    // the gaps between consecutive tokens
+    let tokens: Vec<_> = sentence.iter().collect();
+    let text = sentence.text();
+    let mut out = Vec::new();
+    for i in 0..tokens.len().saturating_sub(1) {
+        let bs = tokens[i].span().end().byte;
+        let be = tokens[i + 1].span().start().byte;
+        if be <= bs {
+            continue;
+        }
+        let gap = &text[bs.min(text.len())..be.min(text.len())];
+        let spaces = gap.chars().filter(|c| *c == ' ').count();
+        if spaces < 2 || !gap.chars().all(|c| c == ' ') {
+            continue;
+        }
+        let cs = tokens[i].span().end().char;
+        let ce = tokens[i + 1].span().start().char;
+        out.push(Suggestion::new(
+            "WHITESPACE_RULE".to_string(),
+            "Multiple whitespace.".to_string(),
+            Span::new(bs..be, cs..ce),
+            vec![" ".to_string()],
+        ));
+    }
+    out
+}
+
+/// LT `CommaWhitespaceRule` (id `COMMA_PARENTHESIS_WHITESPACE`):
+/// whitespace directly before closing punctuation or after opening
+/// punctuation.
+pub(crate) fn comma_parenthesis_whitespace(
+    sentence: &Sentence,
+    lang: Option<&str>,
+) -> Vec<Suggestion> {
+    const LANGS: &[&str] = &[
+        "ca", "es", "en", "de", "fr", "ar", "ru", "uk", "pl", "it", "br",
+        "eo", "ga", "sv", "da", "sk", "sl", "be", "el", "fa", "ro", "tl",
+        "ast", "crh",
+    ];
+    if !lang.map_or(false, |l| LANGS.contains(&l)) {
+        return Vec::new();
+    }
+    let tokens: Vec<_> = sentence.iter().collect();
+    let text = sentence.text();
+    let mut out = Vec::new();
+    for i in 0..tokens.len().saturating_sub(1) {
+        let bs = tokens[i].span().end().byte;
+        let be = tokens[i + 1].span().start().byte;
+        let gap = if be > bs && be <= text.len() {
+            &text[bs..be]
+        } else {
+            ""
+        };
+        if gap.is_empty() || !gap.chars().all(char::is_whitespace) || gap.contains('\n') {
+            continue;
+        }
+        let cs = tokens[i].span().end().char;
+        let ce = tokens[i + 1].span().start().char;
+        let prev_word = tokens[i].word().as_str();
+        let next_word = tokens[i + 1].word().as_str();
+        // whitespace directly before closing punctuation
+        let before_punct = next_word.starts_with(',')
+            || next_word.starts_with(';')
+            || next_word.starts_with(':')
+            || next_word.starts_with('.')
+            || next_word.starts_with('!')
+            || next_word.starts_with('?')
+            || next_word.starts_with(')')
+            || next_word.starts_with(']')
+            || next_word.starts_with('}');
+        // whitespace directly after an opening bracket
+        let after_open = prev_word == "(" || prev_word == "[" || prev_word == "{";
+        if before_punct || after_open {
+            let replacement = if before_punct {
+                vec![next_word.chars().take(1).collect()]
+            } else {
+                Vec::new()
+            };
+            out.push(Suggestion::new(
+                "COMMA_PARENTHESIS_WHITESPACE".to_string(),
+                "Probable falta de espacio.".to_string(),
+                Span::new(bs..be, cs..ce),
+                replacement,
+            ));
+        }
+    }
+    out
+}
+
+/// LT `*UnpairedBracketsRule` families: unmatched (), [], {} (and straight
+/// double quotes where the language pairs them). en runs a quotes-only
+/// variant with its own id (`EN_UNPAIRED_QUOTES`).
+pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    struct Cfg {
+        brackets: bool,
+        quotes: bool,
+        id: &'static str,
+    }
+    let cfg = match lang {
+        Some("en") => Some(Cfg {
+            brackets: false,
+            quotes: true,
+            id: "EN_UNPAIRED_QUOTES",
+        }),
+        Some(l)
+            if matches!(
+                l,
+                "ca" | "ar" | "pt" | "gl" | "eo" | "ga" | "sv" | "da" | "sl" | "tl" | "ast"
+            ) =>
+        {
+            Some(Cfg {
+                brackets: true,
+                quotes: true,
+                id: "UNPAIRED_BRACKETS",
+            })
+        }
+        Some(l) if matches!(l, "de" | "fr" | "it" | "ro" | "sk") => Some(Cfg {
+            brackets: true,
+            quotes: false,
+            id: "UNPAIRED_BRACKETS",
+        }),
+        _ => None,
+    };
+    let cfg = match cfg {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    // bracket stack: (token index, closer)
+    let mut stack: Vec<(usize, char)> = Vec::new();
+    // straight quote pairing: even occurrence closes, odd opens
+    let mut quote_open: Option<usize> = None;
+
+    for (i, token) in tokens.iter().enumerate() {
+        let word = token.word().as_str();
+        for c in word.chars() {
+            if cfg.brackets {
+                match c {
+                    '(' => stack.push((i, ')')),
+                    '[' => stack.push((i, ']')),
+                    '{' => stack.push((i, '}')),
+                    ')' | ']' | '}' => {
+                        // pop the matching opener; unmatched closer flags here
+                        if let Some(pos) = stack.iter().rposition(|(_, cl)| *cl == c) {
+                            stack.remove(pos);
+                        } else {
+                            let start = token.span().start();
+                            let end = token.span().end();
+                            out.push(Suggestion::new(
+                                cfg.id.to_string(),
+                                "Unpaired closing bracket.".to_string(),
+                                Span::new(start.byte..end.byte, start.char..end.char),
+                                Vec::new(),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if cfg.quotes && c == '"' {
+                match quote_open.take() {
+                    Some(_) => {}
+                    None => quote_open = Some(i),
+                }
+            }
+        }
+    }
+    // unmatched openers remain on the stack / in quote_open
+    let mut offenders: Vec<usize> = stack.iter().map(|(i, _)| *i).collect();
+    if let Some(i) = quote_open {
+        offenders.push(i);
+    }
+    offenders.sort_unstable();
+    offenders.dedup();
+    for i in offenders {
+        let start = tokens[i].span().start();
+        let end = tokens[i].span().end();
+        out.push(Suggestion::new(
+            cfg.id.to_string(),
+            "Unpaired opening bracket.".to_string(),
+            Span::new(start.byte..end.byte, start.char..end.char),
+            Vec::new(),
+        ));
+    }
     out
 }

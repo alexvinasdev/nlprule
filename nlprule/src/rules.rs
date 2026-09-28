@@ -326,6 +326,23 @@ impl Rules {
         if self.builtin_lang.as_deref() == Some("km") {
             out.extend(crate::builtins::khmer_space_before(sentence));
         }
+        // text-level families ported from LT 6.5 (task-4)
+        out.extend(crate::builtins::double_punctuation(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::multiple_whitespace(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::comma_parenthesis_whitespace(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::unpaired_brackets(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
         let tokens: Vec<_> = sentence.iter().collect();
         // SimpleReplaceRule phrase table (nl): case-sensitive multiword
         // lookup with sub-rule ids derived from the wrong phrase
