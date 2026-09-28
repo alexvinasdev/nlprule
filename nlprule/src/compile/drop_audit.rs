@@ -83,3 +83,24 @@ fn drop_audit() {
 
     eprintln!("TOTAL deserialize errors: {total_err}, regex defs: {total_regex}");
 }
+
+#[test]
+fn es_quote_probe() {
+    let tok = crate::Tokenizer::new("/home/alex/Documentos/Github/nlprule/nlprule-fork/storage/es_tokenizer.bin").unwrap();
+    for sentence in tok.pipe("El dijo \"hola.") {
+        for t in sentence.iter() {
+            eprintln!("ESQ {:?}", t.word().as_str());
+        }
+    }
+}
+
+#[test]
+fn unpaired_es_probe() {
+    let tok = crate::Tokenizer::new("/home/alex/Documentos/Github/nlprule/nlprule-fork/storage/es_tokenizer.bin").unwrap();
+    for text in ["El dijo \"hola.", "El dijo (hola."] {
+        for sentence in tok.pipe(text) {
+            let sugg = crate::builtins::unpaired_brackets(&sentence, Some("es"));
+            eprintln!("UP {:?} → {:?}", text, sugg.iter().map(|s| s.source().to_string()).collect::<Vec<_>>());
+        }
+    }
+}

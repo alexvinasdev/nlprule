@@ -431,6 +431,9 @@ pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
     if lang.map_or(false, |l| COMMA.contains(&l)) {
         out.push("COMMA_PARENTHESIS_WHITESPACE");
     }
+    if lang == Some("en") {
+        out.push("EN_A_VS_AN");
+    }
     match lang {
         Some("en") => out.push("EN_UNPAIRED_QUOTES"),
         Some("es") => out.push("ES_UNPAIRED_BRACKETS"),
@@ -827,6 +830,79 @@ pub(crate) fn morfologik_spelling(
 /// LT `DoublePunctuationRule`: two consecutive equal punctuation marks
 /// ("..", ",,"). "..." (ellipsis) and numeric contexts are allowed; fr also
 /// allows "..," "?.." "!..".
+/// LT `AvsAnRule` (`EN_A_VS_AN`): a/an selection based on the sound of the
+/// following word, using LT's own det_a/det_an exception lists.
+pub(crate) fn a_vs_an(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("en") {
+        return Vec::new();
+    }
+    let det_a: &std::collections::HashSet<String> = static_ref!(
+        std::collections::HashSet<String> = wordlist(
+            include_str!("builtin_data/en/det_a.txt"))
+            .into_iter()
+            .map(|w: &'static str| w.trim().to_lowercase())
+            .collect()
+    );
+    let det_an: &std::collections::HashSet<String> = static_ref!(
+        std::collections::HashSet<String> = wordlist(
+            include_str!("builtin_data/en/det_an.txt"))
+            .into_iter()
+            .map(|w: &'static str| w.trim().to_lowercase())
+            .collect()
+    );
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    for i in 0..tokens.len().saturating_sub(1) {
+        let word = tokens[i].word().as_str();
+        let article = match word {
+            "a" | "A" => "an",
+            "an" | "An" => "a",
+            _ => continue,
+        };
+        let next_raw = tokens[i + 1].word().as_str();
+        let next = next_raw.trim_matches(|c: char| !c.is_alphanumeric());
+        let first = match next.chars().next() {
+            Some(c) => c,
+            None => continue,
+        };
+        if first.is_ascii_digit() {
+            // numbers: sound is ambiguous ("an 8" but "a 5")
+            continue;
+        }
+        let lower = next.to_lowercase();
+        let all_caps = next.chars().any(|c| c.is_alphabetic())
+            && next.chars().all(|c| !c.is_lowercase());
+        // hyphenated words ("one-time"): decide by the first segment
+        let first_segment = next.split(['-', '\u{2011}']).next().unwrap_or(next);
+        let seg_lower = first_segment.to_lowercase();
+        let needs_an = if det_an.contains(&lower) {
+            true
+        } else if det_a.contains(&lower) || det_a.contains(&seg_lower) {
+            false
+        } else if det_an.contains(&seg_lower) {
+            true
+        } else if all_caps {
+            // abbreviations: ambiguous sound
+            continue;
+        } else {
+            "aeiou".contains(first.to_ascii_lowercase())
+        };
+        if (word.eq_ignore_ascii_case("a") && needs_an)
+            || (word.eq_ignore_ascii_case("an") && !needs_an)
+        {
+            let start = tokens[i].span().start();
+            let end = tokens[i].span().end();
+            out.push(Suggestion::new(
+                "EN_A_VS_AN".to_string(),
+                "Use a different article.".to_string(),
+                Span::new(start.byte..end.byte, start.char..end.char),
+                vec![article.to_string()],
+            ));
+        }
+    }
+    out
+}
+
 pub(crate) fn double_punctuation(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
     const LANGS: &[&str] = &[
         "ca", "es", "en", "fr", "pt", "ru", "pl", "it", "br", "eo", "ga",
