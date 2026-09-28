@@ -500,6 +500,10 @@ pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
     }
     if lang == "ru" {
         out.push("RU_COMPOUNDS");
+        out.push("RU_VERB_CONJUGATION");
+    }
+    if lang == "br" {
+        out.push("BR_TOPO");
     }
     if lang == "es" {
         out.push("ES_QUESTION_MARK");
@@ -557,6 +561,13 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
             ignore: spelling_lists!("it", "ignore.txt"),
             prohibit: &[],
         },
+        // ga: Morfologik ga_IE dictionary (local LT fires MORFOLOGIK_RULE_GA_IE)
+        "ga" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_GA_IE",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
         // br: Morfologik br_FR dictionary (local LT fires MORFOLOGIK_RULE_BR_FR)
         "br" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_BR_FR",
@@ -569,7 +580,7 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "gl" => SpellingRuleConfig {
             id: "HUNSPELL_RULE",
             latin_script: true,
-            ignore: &[],
+            ignore: spelling_lists!("gl", "table_words.txt"),
             prohibit: &[],
         },
         // spellers that fire in the local LT 6.5 corpus measurement
@@ -1039,6 +1050,116 @@ pub(crate) fn es_question_mark(sentence: &Sentence, lang: Option<&str>) -> Vec<S
         Span::new(start.byte..end.byte, start.char..end.char),
         vec![replacement],
     )]
+}
+
+/// LT `RussianVerbConjugationRule` (id `RU_VERB_CONJUGATION`):
+/// pronoun + present-tense verb with mismatched person ("Он работаю").
+/// Span covers pronoun+verb like LT's. Bounded: verb endings map to a
+/// clear person class (-у/-ю 1sg, -ешь/-ёшь 2sg, -ет/-ёт 3sg, -ем/-ём 1pl,
+/// -ете/-ёте 2pl, -ут/-ют/-ат/-ят 3pl); other endings (past, infinitive,
+/// imperative) are skipped.
+pub(crate) fn ru_verb_conjugation(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("ru") {
+        return Vec::new();
+    }
+    let tokens: Vec<_> = sentence.iter().collect();
+    let pronoun_person = |w: &str| -> Option<usize> {
+        match w.to_lowercase().as_str() {
+            "я" => Some(0),
+            "ты" => Some(1),
+            "он" | "она" | "оно" => Some(2),
+            "мы" => Some(3),
+            "вы" => Some(4),
+            "они" => Some(5),
+            _ => None,
+        }
+    };
+    let verb_person = |w: &str| -> Option<usize> {
+        let lw = w.to_lowercase();
+        if lw.len() < 5 {
+            return None;
+        }
+        // descartar infinitivos y pretéritos
+        if lw.ends_with("ться") || lw.ends_with("сть") || lw.ends_with("ти") || lw.ends_with("л") || lw.ends_with("ла") || lw.ends_with("ло") || lw.ends_with("ли") {
+            return None;
+        }
+        if lw.ends_with("ешь") || lw.ends_with("ёшь") {
+            Some(1)
+        } else if lw.ends_with("ет") || lw.ends_with("ёт") {
+            Some(2)
+        } else if lw.ends_with("ем") || lw.ends_with("ём") {
+            Some(3)
+        } else if lw.ends_with("ете") || lw.ends_with("ёте") {
+            Some(4)
+        } else if lw.ends_with("ут") || lw.ends_with("ют") || lw.ends_with("ат") || lw.ends_with("ят") {
+            Some(5)
+        } else if lw.ends_with("у") || lw.ends_with("ю") {
+            Some(0)
+        } else {
+            None
+        }
+    };
+    let mut out = Vec::new();
+    for pair in tokens.windows(2) {
+        let (pron, verb) = (pair[0].word().as_str(), pair[1].word().as_str());
+        let (pp, vp) = match (pronoun_person(pron), verb_person(verb)) {
+            (Some(p), Some(v)) => (p, v),
+            _ => continue,
+        };
+        if pp == vp {
+            continue;
+        }
+        let s = pair[0].span().start();
+        let e = pair[1].span().end();
+        out.push(Suggestion::new(
+            "RU_VERB_CONJUGATION".to_string(),
+            "Verb conjugation does not match the pronoun.".to_string(),
+            Span::new(s.byte..e.byte, s.char..e.char),
+            Vec::new(),
+        ));
+    }
+    out
+}
+
+/// LT `TopoReplaceRule` (id `BR_TOPO`, br): French place names mapped to
+/// their Breton spellings (rules/br/topo.txt, `French=Breton` lines).
+pub(crate) fn br_topo(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("br") {
+        return Vec::new();
+    }
+    let map = static_ref!(
+        std::collections::HashMap<String, String> = {
+            let mut m = std::collections::HashMap::new();
+            for line in include_str!("builtin_data/br_topo.txt").lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') || !line.contains('=') {
+                    continue;
+                }
+                let (fr, brz) = line.split_once('=').unwrap();
+                let (fr, brz) = (fr.trim(), brz.trim());
+                if !fr.is_empty() && !brz.is_empty() {
+                    m.insert(fr.to_string(), brz.to_string());
+                }
+            }
+            m
+        }
+    );
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    for token in &tokens {
+        let word = token.word().as_str();
+        if let Some(brz) = map.get(word) {
+            let s = token.span().start();
+            let e = token.span().end();
+            out.push(Suggestion::new(
+                "BR_TOPO".to_string(),
+                "Brezhoneg: anv-lec'h brezhonek.".to_string(),
+                Span::new(s.byte..e.byte, s.char..e.char),
+                vec![brz.clone()],
+            ));
+        }
+    }
+    out
 }
 
 /// LT `GermanCaseRule` (id `DE_CASE`): a run of consecutive capitalized

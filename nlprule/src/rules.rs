@@ -382,6 +382,14 @@ impl Rules {
             sentence,
             self.builtin_lang.as_deref(),
         ));
+        out.extend(crate::builtins::ru_verb_conjugation(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::br_topo(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
         out.extend(crate::builtins::de_case(
             sentence,
             self.builtin_lang.as_deref(),
