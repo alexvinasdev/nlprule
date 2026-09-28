@@ -237,6 +237,11 @@ Coverage after the goal (coverage_audit.py, reproducible):
 19085 active XML rules / 0 missing, 499 off|temp_off rules / 0 missing,
 0 deserialize warnings, 0 construction errors over the 35 language builds.
 
+Caveat: GERMAN_SPELLER_RULE is gated on the `de-DE` language code exactly
+like LT 6.5 (the generic `de` code does not run the German speller there),
+so the coverage audit's `de` dump (built with code `de`) does not list it;
+it is loaded in the de bin and fires under `de-DE` (probe parity 9/10).
+
 ### Residue by language (marker-fragment compare, final v7)
 
 - `pl` (0.81/0.77): tagger readings — COFANIE_PRZECINKA 28, PREP_CASUS 23,
