@@ -214,20 +214,57 @@ def escape_regex(text: str) -> str:
     return "".join(out)
 
 
-def simple_replace_rules(tables):
-    """Converts LT SimpleReplaceRule data tables (`wrong=correct1|correct2` or
-    `wrong1|wrong2=correct`) into grammar rule XML, one rulegroup per table."""
+def _simple_word_id(w):
+    return re.sub(r"[^\w]", "", w.upper().replace("'", "Q").replace(" ", "_")) or "X"
+
+
+def _simple_pattern(wrong):
+    if " " in wrong:
+        return "".join(f"<token>{escape_xml(t)}</token>" for t in wrong.split(" "))
+    return f'<token regexp="yes">{escape_xml(re.escape(wrong))}</token>'
+
+
+# Esquema de ids empiricamente verificado contra LT 6.5 (ver delta_log):
+# - be/ru/uk/fa/pl replace.txt -> id único <L2>_SIMPLE_REPLACE
+# - es/fr/ca replace.txt -> <L2>_SIMPLE_REPLACE + subregla SIMPLE_<W>
+# - de/en/km replace.txt -> <L2>_SIMPLE_REPLACE + subregla <W> (sin infijo)
+# - uk variantes -> UK_SIMPLE_REPLACE_RENAMED/_SOFT/_SPELLING_1992 (únicos)
+# - ca tablas -> CA_SIMPLE_REPLACE_<SUFFIX>_<W>; operationnames -> NOMS_OPERACIONS_<W>
+SIMPLE_REPLACE_SINGLE = {"be", "ru", "uk", "fa", "pl"}
+SIMPLE_REPLACE_INFIX = {"es": "SIMPLE_", "fr": "SIMPLE_", "ca": "SIMPLE_"}
+UK_TABLE_IDS = {"renamed": "UK_SIMPLE_REPLACE_RENAMED",
+                "soft": "UK_SIMPLE_REPLACE_SOFT",
+                "spelling_2019": "UK_SIMPLE_REPLACE_SPELLING_1992"}
+
+
+def simple_replace_table_ids(lang, stem):
+    """(group_id, per_word, infix) para una tabla replace* de un idioma."""
+    if stem == "replace":
+        if lang in SIMPLE_REPLACE_SINGLE:
+            return f"{lang.upper()}_SIMPLE_REPLACE", False, ""
+        infix = SIMPLE_REPLACE_INFIX.get(lang, "")
+        return f"{lang.upper()}_SIMPLE_REPLACE", True, infix
+    sfx = stem.replace("replace_", "")
+    if lang == "uk":
+        return UK_TABLE_IDS[sfx], False, ""
+    group = "NOMS_OPERACIONS" if sfx == "operationnames" else f"{lang.upper()}_SIMPLE_REPLACE_{sfx.upper()}"
+    return group, True, ""
+
+
+def simple_replace_rules(tables, lang=None):
+    """Convierte las tablas SimpleReplaceRule de LT (wrong=correct) en XML:
+    una categoría por tabla, ids idénticos a los que LT reporta (ver
+    simple_replace_table_ids). Una regla por variante incorrecta (las
+    alternativas multi-token no se pueden expresar como secuencia)."""
     parts = []
     for stem, path in tables:
-        name = "REPLACE_" + re.sub(r"[^A-Za-z0-9]", "_", stem).upper()
+        group, per_word, infix = simple_replace_table_ids(lang, stem)
         rules = []
         try:
             content = Path(path).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        # per-rule conversion does not scale to very large tables; the largest
-        # (nl: 66k lines) would take hours to compile and bloat the binary.
-        # LT handles these as a single dictionary-lookup rule instead.
+        # nl (66k líneas) usa la vía del filter table, no XML
         if content.count("\n") > MAX_TABLE_LINES:
             logging.warning(
                 "%s: table %s has more than %d lines, skipping",
@@ -239,84 +276,28 @@ def simple_replace_rules(tables):
             if not line or "=" not in line:
                 continue
             wrong, correct = line.split("=", 1)
+            correct = correct.split("\t")[0]
             wrongs = [w.strip() for w in wrong.split("|") if w.strip()]
             corrects = [c.strip() for c in correct.split("|") if c.strip()]
             if not wrongs or not corrects:
                 continue
-            token = "|".join(escape_regex(w) for w in wrongs)
             suggestions = "|".join(escape_xml(c) for c in corrects)
-            display = escape_xml(corrects[0])
-            token_xml = escape_xml(token)
-            rid = (
-                ' id="SIMPLE_%s"' % _simple_replace_ruleid(wrongs[0])
-                if lang in PER_WORD_SIMPLE_REPLACE else ""
-            )
-            rules.append(
-                f"<rule{rid}>\n"
-                f"<pattern><token regexp=\"yes\">{token_xml}</token></pattern>\n"
-                f"<message>Did you mean <suggestion>{suggestions}</suggestion>?</message>\n"
-                "</rule>"
-            )
+            for w in wrongs:
+                rid = f' id="{group}_{infix}{_simple_word_id(w)}"' if per_word else ""
+                rules.append(
+                    f"<rule{rid}>\n"
+                    f"<pattern>{_simple_pattern(w)}</pattern>\n"
+                    f"<message>Did you mean <suggestion>{suggestions}</suggestion>?</message>\n"
+                    "</rule>"
+                )
         if rules:
             parts.append(
-                f'<category id="{name}" name="Simple replacements ({escape_xml(stem)})">\n'
-                f'<rulegroup id="{name}" name="Simple replacements ({escape_xml(stem)})">\n'
+                f'<category id="{group}" name="Simple replacements ({escape_xml(stem)})">\n'
+                f'<rulegroup id="{group}" name="Simple replacements ({escape_xml(stem)})">\n'
                 + "\n".join(rules)
                 + "\n</rulegroup>\n</category>"
             )
     return "\n".join(parts)
-
-
-
-MULTITOKEN_LISTS = {
-    "en": ["en/multiwords.txt"],
-    "de": ["de/multitoken-suggest.txt", "de/hunspell/spelling.txt"],
-    "fr": ["fr/multiwords.txt", "fr/hyphenated_words.txt"],
-    "es": ["es/multiwords.txt", "es/hyphenated_words.txt"],
-    "ca": ["ca/multiwords.txt", "ca/hyphenated_words.txt"],
-    "pt": ["pt/multiwords.txt", "pt/hyphenated_words.txt"],
-    "nl": ["nl/multiwords.txt"],
-}
-
-# extra (jar-borne) speller dictionaries to dump per language:
-# (jar name, resource path stem relative to org/languagetool/resource)
-SPELLER_DICTS = {
-    "ca": [("catalan-pos-dict.jar", "ca/ca-ES_spelling")],
-    "de": [(None, "de/hunspell/de_DE")],  # loose in the dist
-    "nl": [("dutch-pos-dict.jar", "nl/spelling/nl_NL")],
-    "pt": [("portuguese-pos-dict.jar", "pt/spelling/pt-PT-90")],
-    "ru": [(None, "ru/hunspell/ru_RU")],
-    "pl": [(None, "pl/hunspell/pl_PL")],
-    "it": [(None, "it/hunspell/it_IT")],
-    "br": [(None, "br/hunspell/br_FR")],
-    "gl": [(None, "gl/galician")],
-}
-
-# plain-text word lists added to the speller vocabulary per language
-SPELLER_LISTS = {
-    "en": ["en/hunspell/spelling.txt", "en/hunspell/ignore.txt"],
-    # German: LT's ignore/spelling/added lists plus the hunspell .dic word
-    # column (the morfologik de_DE.dict dump misses plain-form words like
-    # "baff", "online", "US"). spelling_merged.txt = accepted-but-recommend.
-    "de": [
-        "de/hunspell/spelling.txt",
-        "de/hunspell/ignore.txt",
-        "de/hunspell/spelling_merged.txt",
-        "de/hunspell/spelling_custom.txt",
-        "de/added.txt",
-        "de/hunspell/de_DE.dic",
-    ],
-    "fr": ["fr/added.txt"],
-    "es": ["es/hunspell/spelling.txt", "es/hunspell/ignore.txt"],
-    "ca": ["ca/spelling.txt", "ca/added.txt", "ca/hunspell/ignore.txt"],
-    "nl": ["nl/added.txt"],
-    "ru": ["ru/hunspell/spelling.txt", "ru/hunspell/ignore.txt", "ru/added.txt"],
-    "pt": [],
-    "pl": ["pl/hunspell/ignore.txt"],
-    "it": ["it/hunspell/spelling.txt", "it/hunspell/ignore.txt"],
-    "gl": ["gl/added.txt"],
-}
-
 
 def _words_from_lines(text):
     words = set()
@@ -683,7 +664,7 @@ def make_build_dir(lang, lt_dir, out_root, java, classpath, keep_going):
                 if target.exists():
                     tables.append((stem, target))
 
-        extra = simple_replace_rules(tables)
+        extra = simple_replace_rules(tables, lang=lang)
         if extra:
             content = grammar.read_text(encoding="utf-8", errors="replace")
             content = content.replace("</rules>", extra + "\n</rules>")
