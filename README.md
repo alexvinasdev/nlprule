@@ -225,6 +225,18 @@ fire per sentence (standard level, ids normalized to LT's sub-rule ids):
 | pl | 1000 | 125 | 157 | 0.8109 | 0.7734 | 0.8370 |
 
 
+### Final comparison table (goal coverage 100%, final v8)
+
+`~/nlprule_bg/final_v8.jsonl` (1000 example sentences per language vs the
+local LT 6.5 HTTP server, marker fragments, id jaccard). All 32
+server-verifiable languages: **no net jaccard regression >1pp vs v7**, 15
+languages improved (el +3.6pp, sv +2.6pp, be +1.8pp, tl +1.7pp, pl +1.5pp,
+ro +1.3pp, sl +1.0pp, pt +1.0pp, gl +0.9pp, it +0.6pp, ...).
+
+Coverage after the goal (coverage_audit.py, reproducible):
+19085 active XML rules / 0 missing, 499 off|temp_off rules / 0 missing,
+0 deserialize warnings, 0 construction errors over the 35 language builds.
+
 ### Residue by language (marker-fragment compare, final v7)
 
 - `pl` (0.81/0.77): tagger readings — COFANIE_PRZECINKA 28, PREP_CASUS 23,
