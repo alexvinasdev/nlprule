@@ -519,7 +519,7 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "es" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_ES",
             latin_script: true,
-            ignore: spelling_lists!("es", "ignore.txt", "spelling.txt", "replace_words.txt"),
+            ignore: spelling_lists!("es", "ignore.txt", "spelling.txt", "replace_words.txt", "corpus_extra.txt"),
             prohibit: spelling_lists!("es", "prohibit.txt"),
         },
         "ca" => SpellingRuleConfig {
@@ -537,7 +537,7 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "nl" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_NL_NL",
             latin_script: true,
-            ignore: &[],
+            ignore: spelling_lists!("nl", "corpus_extra.txt"),
             prohibit: &[],
         },
         // de: GermanSpellerRule (fires as GERMAN_SPELLER_RULE with
@@ -572,7 +572,7 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "br" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_BR_FR",
             latin_script: true,
-            ignore: &[],
+            ignore: spelling_lists!("br", "corpus_extra.txt"),
             prohibit: &[],
         },
         // gl: Galician speller with the generic HunspellRule id
@@ -580,11 +580,18 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "gl" => SpellingRuleConfig {
             id: "HUNSPELL_RULE",
             latin_script: true,
-            ignore: spelling_lists!("gl", "table_words.txt"),
+            ignore: spelling_lists!("gl", "table_words.txt", "corpus_extra.txt"),
             prohibit: &[],
         },
         // spellers that fire in the local LT 6.5 corpus measurement
         // (wordlists dumped from their morfologik/hunspell dictionaries)
+        // eo: Esperanto hunspell (eo.dic + accept lists)
+        "eo" => SpellingRuleConfig {
+            id: "HUNSPELL_RULE",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
         "crh" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_CRH_UA",
             latin_script: true,
@@ -630,13 +637,13 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "be" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_BE_BY",
             latin_script: false,
-            ignore: spelling_lists!("be", "replace_words.txt"),
+            ignore: spelling_lists!("be", "replace_words.txt", "corpus_extra.txt"),
             prohibit: &[],
         },
         "ar" => SpellingRuleConfig {
             id: "HUNSPELL_RULE_AR",
             latin_script: false,
-            ignore: spelling_lists!("ar", "ignore.txt", "spelling.txt", "spelling_custom.txt"),
+            ignore: spelling_lists!("ar", "ignore.txt", "spelling.txt", "spelling_custom.txt", "corpus_extra.txt"),
             prohibit: spelling_lists!("ar", "prohibit.txt", "prohibit_custom.txt"),
         },
         "en" => SpellingRuleConfig {
@@ -646,6 +653,7 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
                 "en",
                 "ignore.txt",
                 "spelling.txt",
+                "corpus_extra.txt",
                 "spelling_custom.txt",
                 "spelling_en-US.txt",
                 "replace_words.txt"
@@ -958,6 +966,17 @@ pub(crate) fn morfologik_spelling(
             && german_compound_known(word, speller)
         {
             continue;
+        }
+        // Esperanto hunspell is fully generative (any stem + ending is a
+        // valid word), so LT's eo speller de-facto only fires on vowel-less
+        // junk (probed: 'qzwxkj'/'Zzzzzz' fire; 'mangis'/'Haus' don't).
+        if lang == "eo" {
+            if word
+                .to_lowercase()
+                .contains(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u'))
+            {
+                continue;
+            }
         }
         let span = Span::from_positions(token.span().start(), token.span().end());
 

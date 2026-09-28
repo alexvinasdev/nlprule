@@ -122,15 +122,23 @@ fn clean_overlapping(suggestions: Vec<Suggestion>, lang: Option<&str>) -> Vec<Su
         }
 
         // LT's HTTP API reports every firing rule for a span; exact-same-span
-        // suggestions from DIFFERENT rules are both kept (e.g. an XML rule
-        // and a builtin like DE_VERBAGREEMENT / es COMILLAS + ES_UNPAIRED)
+        // suggestions are both kept ONLY when one of them is a builtin text
+        // family (e.g. es COMILLAS + ES_UNPAIRED, DE_VERBAGREEMENT).  For two
+        // XML rules the v7 keep-one semantics apply: the port tagger makes
+        // some XML rules over-fire on spans where LT fires a different rule,
+        // and surfacing both adds only-nlprule events (v8 regression).
         if cur_from == prev_from && cur_to == prev_to && rule_match.source() != prev.source() {
-            clean.push(prev);
-            prev = rule_match;
-            let span = prev.span().char().clone();
-            prev_from = span.start;
-            prev_to = span.end;
-            continue;
+            let fam = crate::builtins::text_family_ids(lang);
+            let either_builtin =
+                fam.contains(&rule_match.source()) || fam.contains(&prev.source());
+            if either_builtin {
+                clean.push(prev);
+                prev = rule_match;
+                let span = prev.span().char().clone();
+                prev_from = span.start;
+                prev_to = span.end;
+                continue;
+            }
         }
         // overlapping: CleanOverlappingFilter semantics — language priority
         let priority_of = |sugg: &Suggestion| -> isize {
