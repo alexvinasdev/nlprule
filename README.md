@@ -244,12 +244,42 @@ ar 85.2%, es 78.1%, ca 75.3%.
 
 ### Live comparison against the LanguageTool HTTP server
 
-`build/compare_server.py` sends each language's embedded example sentences
-(unique, up to 1000 per language) to a local instance of the official
-LanguageTool 6.5 HTTP server and to nlprule, and compares the rule IDs that
-fire per sentence (standard level, ids normalized to LT's sub-rule ids):
+`build/compare_server.py` sends each language's embedded example sentences (unique, up to 1000 per language) to a local instance of the official LanguageTool 6.5 HTTP server and to nlprule, and compares the rule IDs that fire per sentence (standard level, ids normalized to LT's sub-rule ids). Final results (single clean run; baseline deltas in the fork table above):
 
 | lang | sentences | only nlprule | only LT | ID precision vs LT | ID recall vs LT | Jaccard |
+|---|---|---|---|---|---|---|
+| ast | 71 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
+| km | 52 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
+| ta | 216 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
+| fa | 282 | 0 | 1 | 1.0000 | 0.9964 | 0.9965 |
+| ga | 1000 | 4 | 3 | 0.9955 | 0.9966 | 0.9960 |
+| sl | 96 | 1 | 1 | 0.9808 | 0.9808 | 0.9896 |
+| crh | 93 | 0 | 1 | 1.0000 | 0.9867 | 0.9892 |
+| be | 82 | 0 | 1 | 1.0000 | 0.9836 | 0.9878 |
+| br | 841 | 3 | 13 | 0.9905 | 0.9602 | 0.9845 |
+| tl | 59 | 1 | 1 | 0.9688 | 0.9688 | 0.9831 |
+| el | 56 | 1 | 1 | 0.9444 | 0.9444 | 0.9821 |
+| sk | 39 | 1 | 1 | 0.9583 | 0.9583 | 0.9744 |
+| it | 178 | 0 | 5 | 1.0000 | 0.9580 | 0.9719 |
+| de | 1000 | 27 | 27 | 0.9276 | 0.9276 | 0.9715 |
+| pt | 1000 | 13 | 29 | 0.9797 | 0.9559 | 0.9655 |
+| eo | 507 | 10 | 14 | 0.9728 | 0.9623 | 0.9645 |
+| ar | 616 | 1 | 22 | 0.9973 | 0.9436 | 0.9627 |
+| gl | 483 | 5 | 17 | 0.9840 | 0.9475 | 0.9627 |
+| ro | 939 | 47 | 31 | 0.9391 | 0.9590 | 0.9627 |
+| da | 87 | 2 | 4 | 0.9688 | 0.9394 | 0.9540 |
+| uk | 1000 | 47 | 42 | 0.9388 | 0.9450 | 0.9488 |
+| sv | 39 | 1 | 2 | 0.9688 | 0.9394 | 0.9487 |
+| ja | 735 | 0 | 38 | 1.0000 | 0.9482 | 0.9483 |
+| en | 1000 | 32 | 61 | 0.9510 | 0.9106 | 0.9390 |
+| fr | 1000 | 53 | 70 | 0.9127 | 0.8878 | 0.9313 |
+| de-DE-x-simple-language | 114 | 7 | 2 | 0.8971 | 0.9683 | 0.9298 |
+| nl | 1000 | 23 | 72 | 0.9723 | 0.9181 | 0.9285 |
+| ru | 1000 | 68 | 86 | 0.9182 | 0.8987 | 0.9135 |
+| es | 1000 | 69 | 88 | 0.9023 | 0.8786 | 0.9127 |
+| ca | 1000 | 66 | 96 | 0.8840 | 0.8397 | 0.8980 |
+| zh | 1000 | 4 | 145 | 0.9943 | 0.8284 | 0.8520 |
+| pl | 1000 | 129 | 136 | 0.8120 | 0.8038 | 0.8510 |
 | ta | 216 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
 | km | 52 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
 | ast | 71 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 |
