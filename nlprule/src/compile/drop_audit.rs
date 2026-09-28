@@ -83,6 +83,3 @@ fn drop_audit() {
 
     eprintln!("TOTAL deserialize errors: {total_err}, regex defs: {total_regex}");
 }
-
-#[test]
-

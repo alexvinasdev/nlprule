@@ -283,6 +283,9 @@ SPELLER_DICTS = {
     "pt": [("portuguese-pos-dict.jar", "pt/spelling/pt-PT-90")],
     "ru": [(None, "ru/hunspell/ru_RU")],
     "pl": [(None, "pl/hunspell/pl_PL")],
+    "it": [(None, "it/hunspell/it_IT")],
+    "br": [(None, "br/hunspell/br_FR")],
+    "gl": [(None, "gl/galician")],
 }
 
 # plain-text word lists added to the speller vocabulary per language
@@ -296,6 +299,8 @@ SPELLER_LISTS = {
     "ru": ["ru/hunspell/spelling.txt", "ru/hunspell/ignore.txt", "ru/added.txt"],
     "pt": [],
     "pl": ["pl/hunspell/ignore.txt"],
+    "it": ["it/hunspell/spelling.txt", "it/hunspell/ignore.txt"],
+    "gl": ["gl/added.txt"],
 }
 
 

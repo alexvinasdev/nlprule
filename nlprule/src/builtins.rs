@@ -476,6 +476,29 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         // de disabled: GermanSpellerRule decomposes compounds before looking
         // them up; without that port every non-listed compound would over-fire
         // "de" => SpellingRuleConfig { id: "MORFOLOGIK_RULE_DE_DE", ... },
+        // it: Morfologik it_IT dictionary + hunspell ignore/spelling lists
+        // (the local LT 6.5 fires MORFOLOGIK_RULE_IT_IT)
+        "it" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_IT_IT",
+            latin_script: true,
+            ignore: spelling_lists!("it", "ignore.txt"),
+            prohibit: &[],
+        },
+        // br: Morfologik br_FR dictionary (local LT fires MORFOLOGIK_RULE_BR_FR)
+        "br" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_BR_FR",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        // gl: Galician speller with the generic HunspellRule id
+        // (local LT fires HUNSPELL_RULE for gl)
+        "gl" => SpellingRuleConfig {
+            id: "HUNSPELL_RULE",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
         "ar" => SpellingRuleConfig {
             id: "HUNSPELL_RULE_AR",
             latin_script: false,
