@@ -515,19 +515,19 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "es" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_ES",
             latin_script: true,
-            ignore: spelling_lists!("es", "ignore.txt", "spelling.txt"),
+            ignore: spelling_lists!("es", "ignore.txt", "spelling.txt", "replace_words.txt"),
             prohibit: spelling_lists!("es", "prohibit.txt"),
         },
         "ca" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_CA_ES",
             latin_script: true,
-            ignore: spelling_lists!("ca", "ignore.txt"),
+            ignore: spelling_lists!("ca", "ignore.txt", "replace_words.txt"),
             prohibit: spelling_lists!("ca", "prohibit.txt"),
         },
         "fr" => SpellingRuleConfig {
             id: "FR_SPELLING_RULE",
             latin_script: true,
-            ignore: spelling_lists!("fr", "ignore.txt", "spelling.txt", "spelling_custom.txt"),
+            ignore: spelling_lists!("fr", "ignore.txt", "spelling.txt", "spelling_custom.txt", "replace_words.txt"),
             prohibit: spelling_lists!("fr", "prohibit.txt"),
         },
         "nl" => SpellingRuleConfig {
@@ -619,7 +619,7 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "be" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_BE_BY",
             latin_script: false,
-            ignore: &[],
+            ignore: spelling_lists!("be", "replace_words.txt"),
             prohibit: &[],
         },
         "ar" => SpellingRuleConfig {
@@ -636,26 +636,27 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
                 "ignore.txt",
                 "spelling.txt",
                 "spelling_custom.txt",
-                "spelling_en-US.txt"
+                "spelling_en-US.txt",
+                "replace_words.txt"
             ),
             prohibit: spelling_lists!("en", "prohibit.txt", "prohibit_custom.txt"),
         },
         "pt" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_PT",
             latin_script: true,
-            ignore: &[],
+            ignore: spelling_lists!("pt", "replace_words.txt"),
             prohibit: &[],
         },
         "ru" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_RU_RU",
             latin_script: false,
-            ignore: spelling_lists!("ru", "ignore.txt", "spelling.txt"),
+            ignore: spelling_lists!("ru", "ignore.txt", "spelling.txt", "replace_words.txt"),
             prohibit: spelling_lists!("ru", "prohibit.txt"),
         },
         "uk" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_UK_UA",
             latin_script: false,
-            ignore: spelling_lists!("uk", "ignore.txt", "spelling.txt"),
+            ignore: spelling_lists!("uk", "ignore.txt", "spelling.txt", "replace_words.txt"),
             prohibit: &[],
         },
         // MorfologikPolishSpellerRule: pl/hunspell/pl_PL.dict + ignore/
@@ -664,7 +665,7 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "pl" => SpellingRuleConfig {
             id: "MORFOLOGIK_RULE_PL_PL",
             latin_script: true,
-            ignore: spelling_lists!("pl", "ignore.txt", "spelling.txt"),
+            ignore: spelling_lists!("pl", "ignore.txt", "spelling.txt", "replace_words.txt"),
             prohibit: spelling_lists!("pl", "prohibit.txt"),
         },
         // LT's KhmerHunspellRule: generic id, khmer script, hunspell
