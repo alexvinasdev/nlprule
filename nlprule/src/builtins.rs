@@ -434,6 +434,10 @@ pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
     if lang == Some("en") {
         out.push("EN_A_VS_AN");
     }
+    if lang == Some("ar") {
+        out.push("ARABIC_QM_WHITESPACE");
+        out.push("ARABIC_SC_WHITESPACE");
+    }
     match lang {
         Some("en") => out.push("EN_UNPAIRED_QUOTES"),
         Some("es") => out.push("ES_UNPAIRED_BRACKETS"),
@@ -830,6 +834,50 @@ pub(crate) fn morfologik_spelling(
 /// LT `DoublePunctuationRule`: two consecutive equal punctuation marks
 /// ("..", ",,"). "..." (ellipsis) and numeric contexts are allowed; fr also
 /// allows "..," "?.." "!..".
+/// LT ar-specific whitespace rules: `ARABIC_QM_WHITESPACE` (space before
+/// the Arabic question mark ؟) and `ARABIC_SC_WHITESPACE` (space before
+/// the Arabic semicolon ؛). Probed on LT 6.5: both flag the whitespace
+/// run before the punctuation with a join suggestion.
+pub(crate) fn arabic_punct_whitespace(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("ar") {
+        return Vec::new();
+    }
+    let tokens: Vec<_> = sentence.iter().collect();
+    let text = sentence.text();
+    let mut out = Vec::new();
+    for i in 0..tokens.len().saturating_sub(1) {
+        let bs = tokens[i].span().end().byte;
+        let be = tokens[i + 1].span().start().byte;
+        let gap = if be > bs && be <= text.len() {
+            &text[bs..be]
+        } else {
+            ""
+        };
+        if gap.is_empty() || !gap.chars().all(char::is_whitespace) || gap.contains('\n') {
+            continue;
+        }
+        let next = tokens[i + 1].word().as_str();
+        let id = if next.starts_with('\u{61f}') {
+            Some("ARABIC_QM_WHITESPACE")
+        } else if next.starts_with('\u{61b}') {
+            Some("ARABIC_SC_WHITESPACE")
+        } else {
+            None
+        };
+        if let Some(id) = id {
+            let cs = tokens[i].span().end().char;
+            let ce = tokens[i + 1].span().start().char;
+            out.push(Suggestion::new(
+                id.to_string(),
+                "Whitespace before punctuation.".to_string(),
+                Span::new(bs..be, cs..ce),
+                vec![next.chars().take(1).collect()],
+            ));
+        }
+    }
+    out
+}
+
 /// LT `AvsAnRule` (`EN_A_VS_AN`): a/an selection based on the sound of the
 /// following word, using LT's own det_a/det_an exception lists.
 pub(crate) fn a_vs_an(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
