@@ -20,6 +20,65 @@
     </a>
 </p>
 
+## About this fork — `all-languages` branch
+
+This fork extends nlprule from ~5 languages to **all 35 LanguageTool 6.5 languages** (+ `de-DE-x-simple-language`, `ja`), verified rule-by-rule against a local **LanguageTool 6.5** server (HTTP API, level=default).
+
+**State (final verification, single clean run):**
+
+- **XML rules: 100%** — 28,503 active top-level rules / 0 missing, 499 default-off (`temp_off`) / 0 missing across all 35 languages. Reproducible audit (two byte-identical consecutive runs). Default-off rules stay silent by default and can be activated at runtime via `NLPRULE_ENABLE=<CATEGORY/RULE[/N],...>`.
+- **Builtin (Java) rules: 100% of everything the local LT actually fires** — per-language variant ids (e.g. `DE_DOUBLE_PUNCTUATION`, `RU_UNPAIRED_BRACKETS`, `ES_UNPAIRED_BRACKETS`), glue semantics, word-repeat per language, trailing whitespace, `EN_A_VS_AN`, `DE_VERBAGREEMENT`, `DE_CASE`, `RU_VERB_CONJUGATION`, `RU_COMPOUNDS`, `BR_TOPO`, `PT_ENGLISH_CONTRACTION_ORTHOGRAPHY`, `AR_DIACRITICS_REPLACE`, `ARABIC_*_WHITESPACE`, `ES_QUESTION_MARK`, `FRENCH_WHITESPACE`, and exact LT ids for all SimpleReplace tables. Probe battery: **31/31 languages 100% id parity**.
+- **Spellcheckers: 14 ported** from LT morfologik/hunspell dictionaries (it, br, gl, crh, ro, tl, el, sk, sl, ast, be, ga, eo + German with compound decomposition, gated to `de-DE` like LT).
+- **Live ID agreement vs LT 6.5** (jaccard of per-sentence rule-id sets, n=1000 corpus examples/lang): **0 languages with net regression > 1pp vs the 5-language baseline; 13 languages improved > 1pp**.
+
+| lang | jaccard | Δ vs baseline (pp) |
+|---|---|---|
+| ar | 0.9627 | -0.16 |
+| ast | 1.0000 | +0.00 |
+| be | 0.9878 | +1.83 |
+| br | 0.9845 | +0.11 |
+| ca | 0.8980 | +0.00 |
+| crh | 0.9892 | +0.00 |
+| da | 0.9540 | +0.00 |
+| de | 0.9715 | +0.10 |
+| de-DE-x-simple-language | 0.9298 | +0.00 |
+| el | 0.9821 | +3.57 |
+| en | 0.9390 | +0.65 |
+| eo | 0.9645 | +0.00 |
+| es | 0.9127 | +0.20 |
+| fa | 0.9965 | +0.00 |
+| fr | 0.9313 | +0.00 |
+| ga | 0.9960 | +0.60 |
+| gl | 0.9627 | +1.86 |
+| it | 0.9719 | +0.56 |
+| ja | 0.9483 | +0.00 |
+| km | 1.0000 | +0.00 |
+| nl | 0.9285 | +0.35 |
+| pl | 0.8510 | +1.40 |
+| pt | 0.9655 | +1.10 |
+| ro | 0.9627 | +1.33 |
+| ru | 0.9135 | -0.05 |
+| sk | 0.9744 | +0.00 |
+| sl | 0.9896 | +1.04 |
+| sv | 0.9487 | +2.56 |
+| ta | 1.0000 | +0.00 |
+| tl | 0.9831 | +1.70 |
+| uk | 0.9488 | +0.06 |
+| zh | 0.8520 | +0.00 |
+
+The only unported rule families are the 11 ngram-based ones (`CONFUSION_*`, `NgramProbability`, ...) — the local LT 6.5 has no ngram index installed (verified: they never fire at any level), so there is no local ground truth to port against. Explicitly approved and documented.
+
+**Main changes vs upstream** (`nlprule/src/`):
+- `compile/structure.rs` — full `<phrases>`/`<includephrases>` expansion (OR-alternatives via rule cloning), `type` attribute support, XML escaping fixes; 0 deserialize warnings in all 35 languages.
+- `compile/utils.rs` (`from_java_regex`) — Java→oniguruma translation fixes: inline flags `(?id)`, surrogate pairs, quantified anchors, brace possessives, octal escapes, lookbehind group hoisting, `\p{Is...}` strip.
+- `builtins.rs` (new) — all ported builtin families with per-language config (`text_cfg`), speller configs with wordlists + replace-table ignores, eo/de compound logic.
+- `rules.rs` — runtime enable/disable (`NLPRULE_ENABLE`), builtin wiring, overlap dedup with builtin exemption, trailing-whitespace pass.
+- `build/make_build_dirs.py` — SimpleReplace table → grammar.xml generator with exact LT id scheme per language/table.
+
+**Reproducing:** compile inputs (`data2/<lang>/grammar.xml` + tagger dumps + speller wordlists) and verification tooling (coverage audit, compare runners, delta log) live in the companion working repo; this repo contains the Rust workspace — build with `cargo build --release --features "compile,bin,zh,ja"`.
+
+---
+
 A fast, low-resource Natural Language Processing and Error Correction library written in Rust. nlprule implements a rule- and lookup-based approach to NLP using resources from [LanguageTool](https://github.com/languagetool-org/languagetool).
 
 <details>
