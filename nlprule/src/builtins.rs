@@ -487,9 +487,19 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
             ignore: &[],
             prohibit: &[],
         },
-        // de disabled: GermanSpellerRule decomposes compounds before looking
-        // them up; without that port every non-listed compound would over-fire
-        // "de" => SpellingRuleConfig { id: "MORFOLOGIK_RULE_DE_DE", ... },
+        // de: GermanSpellerRule (fires as GERMAN_SPELLER_RULE with
+        // language=de-DE; the generic "de" code does not run it). The
+        // wordlist fuses the de_DE.dict dump with LT's ignore/spelling/
+        // spelling_merged/added lists, and unknown words are accepted when
+        // they decompose into known parts (German compounds).
+        // LT quirk: the German speller runs under the specific code de-DE
+        // only (language=de does NOT run it); the port mirrors that gate.
+        "de-DE" => SpellingRuleConfig {
+            id: "GERMAN_SPELLER_RULE",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
         // it: Morfologik it_IT dictionary + hunspell ignore/spelling lists
         // (the local LT 6.5 fires MORFOLOGIK_RULE_IT_IT)
         "it" => SpellingRuleConfig {
@@ -645,6 +655,87 @@ fn spelling_ignored(word: &str, config: &SpellingRuleConfig) -> bool {
     is_ignored(word)
 }
 
+/// German compound acceptance: `Bundesbildungsministerin` style words not
+/// present as-is in the dictionary are correct when they decompose into
+/// dictionary parts. Hyphenated compounds need every segment known; plain
+/// compounds use a greedy left-longest split (min 3 chars per part).
+fn german_compound_known(word: &str, speller: &crate::rule::filter_data::SpellerDict) -> bool {
+    if word.contains('-') {
+        // whole compound first ("E-Mail", "Kfz-Versicherung")
+        if speller.is_known(word) || speller.is_known(&word.to_lowercase()) {
+            return true;
+        }
+        // segments must be known; a short unknown segment is accepted when
+        // joined with a neighbour it forms a dictionary word ("E-Mail")
+        let segs: Vec<&str> = word
+            .split('-')
+            .map(|s| s.trim_end_matches('.'))
+            .collect();
+        let known = |s: &str| speller.is_known(s) || speller.is_known(&s.to_lowercase());
+        let mut ok = true;
+        for seg in &segs {
+            if known(seg) {
+                continue;
+            }
+            let joined = segs.iter().any(|other| {
+                other != seg && (known(&format!("{}-{}", seg, other)) || known(&format!("{}-{}", other, seg)))
+            });
+            if !joined {
+                ok = false;
+                break;
+            }
+        }
+        return ok;
+    }
+    // German Fugenelemente: the dict form of a compound head may carry a
+    // linker suffix ("Enddefekt" = "Ende" + "defekt")
+    fn head_ok(head: &str, speller: &crate::rule::filter_data::SpellerDict) -> bool {
+        let lower = head.to_lowercase();
+        if speller.is_known(head) || speller.is_known(&lower) {
+            return true;
+        }
+        for linker in ["e", "en", "n", "s", "es"] {
+            let mut joined = String::with_capacity(lower.len() + linker.len());
+            joined.push_str(&lower);
+            joined.push_str(linker);
+            if speller.is_known(&joined) {
+                return true;
+            }
+        }
+        false
+    }
+    fn decompose(w: &str, speller: &crate::rule::filter_data::SpellerDict, depth: u8) -> bool {
+        if depth == 0 || w.chars().count() < 6 {
+            return false;
+        }
+        // greedy left-longest: try the longest dictionary prefix first
+        let mut split_points: Vec<usize> = Vec::new();
+        for (i, _) in w.char_indices().skip(2) {
+            if i + 3 <= w.len() {
+                split_points.push(i);
+            }
+        }
+        split_points.reverse();
+        for i in split_points {
+            let head = &w[..i];
+            let tail = &w[i..];
+            if tail.chars().count() < 3 {
+                continue;
+            }
+            if head_ok(head, speller)
+                && (speller.is_known(tail) || speller.is_known(&tail.to_lowercase()))
+            {
+                return true;
+            }
+            if head_ok(head, speller) && decompose(tail, speller, depth - 1) {
+                return true;
+            }
+        }
+        false
+    }
+    decompose(word, speller, 4)
+}
+
 fn is_latin(c: char) -> bool {
     // approximate Java's \p{script=latin}
     let cp = c as u32;
@@ -787,6 +878,15 @@ pub(crate) fn morfologik_spelling(
         let word = word.as_str();
         let prohibited = config.prohibit.contains(&word);
         if speller.is_known(word) && !prohibited {
+            continue;
+        }
+        // GermanSpellerRule accepts unknown words that decompose into
+        // dictionary parts (compounds): hyphen segments, or a greedy
+        // left-longest split with >=2 known parts of >=3 chars each.
+        if config.id == "GERMAN_SPELLER_RULE"
+            && !prohibited
+            && german_compound_known(word, speller)
+        {
             continue;
         }
         let span = Span::from_positions(token.span().start(), token.span().end());

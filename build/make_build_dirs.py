@@ -291,7 +291,17 @@ SPELLER_DICTS = {
 # plain-text word lists added to the speller vocabulary per language
 SPELLER_LISTS = {
     "en": ["en/hunspell/spelling.txt", "en/hunspell/ignore.txt"],
-    "de": ["de/hunspell/spelling.txt", "de/hunspell/ignore.txt", "de/added.txt"],
+    # German: LT's ignore/spelling/added lists plus the hunspell .dic word
+    # column (the morfologik de_DE.dict dump misses plain-form words like
+    # "baff", "online", "US"). spelling_merged.txt = accepted-but-recommend.
+    "de": [
+        "de/hunspell/spelling.txt",
+        "de/hunspell/ignore.txt",
+        "de/hunspell/spelling_merged.txt",
+        "de/hunspell/spelling_custom.txt",
+        "de/added.txt",
+        "de/hunspell/de_DE.dic",
+    ],
     "fr": ["fr/added.txt"],
     "es": ["es/hunspell/spelling.txt", "es/hunspell/ignore.txt"],
     "ca": ["ca/spelling.txt", "ca/added.txt", "ca/hunspell/ignore.txt"],
@@ -310,8 +320,14 @@ def _words_from_lines(text):
         line = line.split("#")[0].strip()
         if not line:
             continue
-        # added.txt/removed.txt style "form\tlemma\tpos" or plain word lists
+        # added.txt/removed.txt style "form\tlemma\tpos" or plain word lists;
+        # hunspell .dic lines carry affix flags after an unescaped slash
+        # ("Fahrrad/ABX") — strip them (flags are all-uppercase).
         first = line.split("\t")[0].strip()
+        if "/" in first:
+            stem, _, flags = first.partition("/")
+            if flags and flags.strip("\\/") == flags.upper() and flags.isalpha():
+                first = stem.strip()
         if first:
             words.add(first)
     return words
