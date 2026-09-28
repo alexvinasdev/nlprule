@@ -433,6 +433,7 @@ pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
     }
     match lang {
         Some("en") => out.push("EN_UNPAIRED_QUOTES"),
+        Some("es") => out.push("ES_UNPAIRED_BRACKETS"),
         Some(l)
             if matches!(
                 l,
@@ -496,6 +497,56 @@ fn spelling_config(lang: &str) -> Option<SpellingRuleConfig> {
         "gl" => SpellingRuleConfig {
             id: "HUNSPELL_RULE",
             latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        // spellers that fire in the local LT 6.5 corpus measurement
+        // (wordlists dumped from their morfologik/hunspell dictionaries)
+        "crh" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_CRH_UA",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        "ro" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_RO_RO",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        "tl" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_TL",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        "el" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_EL_GR",
+            latin_script: false,
+            ignore: &[],
+            prohibit: &[],
+        },
+        "sk" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_SK_SK",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        "sl" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_SL_SI",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        "ast" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_AST",
+            latin_script: true,
+            ignore: &[],
+            prohibit: &[],
+        },
+        "be" => SpellingRuleConfig {
+            id: "MORFOLOGIK_RULE_BE_BY",
+            latin_script: false,
             ignore: &[],
             prohibit: &[],
         },
@@ -936,13 +987,23 @@ pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<
     struct Cfg {
         brackets: bool,
         quotes: bool,
+        guillemets: bool,
         id: &'static str,
     }
     let cfg = match lang {
         Some("en") => Some(Cfg {
             brackets: false,
             quotes: true,
+            guillemets: false,
             id: "EN_UNPAIRED_QUOTES",
+        }),
+        // es runs SpanishUnpairedBracketsRule (ES_UNPAIRED_BRACKETS) with
+        // brackets, straight quotes and guillemets (probed on LT 6.5)
+        Some("es") => Some(Cfg {
+            brackets: true,
+            quotes: true,
+            guillemets: true,
+            id: "ES_UNPAIRED_BRACKETS",
         }),
         Some(l)
             if matches!(
@@ -953,12 +1014,14 @@ pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<
             Some(Cfg {
                 brackets: true,
                 quotes: true,
+                guillemets: false,
                 id: "UNPAIRED_BRACKETS",
             })
         }
         Some(l) if matches!(l, "de" | "fr" | "it" | "ro" | "sk") => Some(Cfg {
             brackets: true,
             quotes: false,
+            guillemets: false,
             id: "UNPAIRED_BRACKETS",
         }),
         _ => None,
@@ -1005,6 +1068,26 @@ pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<
                 match quote_open.take() {
                     Some(_) => {}
                     None => quote_open = Some(i),
+                }
+            }
+            if cfg.guillemets {
+                match c {
+                    '«' => stack.push((i, '»')),
+                    '»' => {
+                        if let Some(pos) = stack.iter().rposition(|(_, cl)| *cl == c) {
+                            stack.remove(pos);
+                        } else {
+                            let start = token.span().start();
+                            let end = token.span().end();
+                            out.push(Suggestion::new(
+                                cfg.id.to_string(),
+                                "Unpaired closing guillemet.".to_string(),
+                                Span::new(start.byte..end.byte, start.char..end.char),
+                                Vec::new(),
+                            ));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
