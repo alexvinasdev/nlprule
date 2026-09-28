@@ -372,8 +372,59 @@ pub(crate) fn repeat_rule_id(lang: Option<&str>) -> &'static str {
         Some("ca") => "CATALAN_WORD_REPEAT_RULE",
         Some("pt") => "PORTUGUESE_WORD_REPEAT_RULE",
         Some("it") => "ITALIAN_WORD_REPEAT_RULE",
+        Some("en") => "ENGLISH_WORD_REPEAT_RULE",
+        Some("ar") => "ARABIC_WORD_REPEAT_RULE",
+        Some("fa") => "PERSIAN_WORD_REPEAT_RULE",
         _ => "WORD_REPEAT_RULE",
     }
+}
+
+/// Languages whose LT 6.5 configuration registers NO WordRepeatRule
+/// (verified empirically: noun-repeat probes never fire) — the port must
+/// not emit a repeat suggestion there either.
+const NO_REPEAT_LANGS: &[&str] = &["ast", "crh", "da", "ja", "km", "ta", "tl", "zh"];
+
+/// LT `WordRepeatRule` and per-language subclasses: adjacent identical
+/// words. English only flags case-different repetitions (its subclass
+/// suppresses identical lowercase repeats like "word word"); German has
+/// case-pair exceptions.
+pub(crate) fn word_repeat(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    let lang = match lang {
+        Some(l) if !NO_REPEAT_LANGS.contains(&l) => l,
+        _ => return Vec::new(),
+    };
+    let tokens: Vec<_> = sentence.iter().collect();
+    if tokens.len() < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for pair in tokens.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let ta = a.word().as_str();
+        let tb = b.word().as_str();
+        if !b.has_space_before() || ta.chars().count() < 2 {
+            continue;
+        }
+        if !ta.chars().all(char::is_alphabetic) || !ta.eq_ignore_ascii_case(tb) {
+            continue;
+        }
+        if lang == "en" && ta == tb {
+            // EnglishWordRepeatRule: only case-different repetitions
+            continue;
+        }
+        // GermanWordRepeatRule.ignore: case-specific exceptions
+        if lang == "de" && matches!((ta, tb), ("Sie", "sie") | ("sie", "Sie") | ("Waren", "waren") | ("waren", "Waren")) {
+            continue;
+        }
+        let span = Span::from_positions(a.span().start(), b.span().end());
+        out.push(Suggestion::new(
+            repeat_rule_id(Some(lang)).to_string(),
+            "Possible typo: you repeated a word".to_string(),
+            span,
+            vec![ta.to_string()],
+        ));
+    }
+    out
 }
 
 /// Inventory of the rule ids the built-in (Java-only in LT) families can
@@ -445,6 +496,10 @@ pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
     if lang == "de" {
         out.push("DE_VERBAGREEMENT");
         out.push("DE_SUBJECT_VERB_AGREEMENT");
+        out.push("DE_CASE");
+    }
+    if lang == "ru" {
+        out.push("RU_COMPOUNDS");
     }
     if lang == "es" {
         out.push("ES_QUESTION_MARK");
@@ -836,6 +891,15 @@ pub(crate) fn morfologik_spelling(
         {
             continue;
         }
+        // ru: LT's speller accepts hyphenated forms whose joined form is a
+        // dictionary word (по-немногу -> понемногу), so RU_COMPOUNDS can
+        // flag them instead
+        if lang == "ru" && word.contains('-') {
+            let joined: String = word.chars().filter(|c| *c != '-').collect();
+            if !joined.is_empty() && speller.is_known(&joined) {
+                continue;
+            }
+        }
         // English speller: words containing a dot (domain-like
         // "wordpress.com") are ignored, and hyphenated words are checked
         // part by part, flagging only an unknown part
@@ -974,6 +1038,112 @@ pub(crate) fn es_question_mark(sentence: &Sentence, lang: Option<&str>) -> Vec<S
         Span::new(start.byte..end.byte, start.char..end.char),
         vec![replacement],
     )]
+}
+
+/// LT `GermanCaseRule` (id `DE_CASE`): a run of consecutive capitalized
+/// definite articles (Der/Die/Das) — after the leading pair the rest of
+/// the run must be lowercase. Empirically: a 2-token run flags its second
+/// member, runs of 3+ flag from the third member on.
+pub(crate) fn de_case(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("de") {
+        return Vec::new();
+    }
+    let tokens: Vec<_> = sentence.iter().collect();
+    let is_cap_article = |w: &str| matches!(w, "Der" | "Die" | "Das");
+    let mut out = Vec::new();
+    let mut i = 1;
+    while i < tokens.len() {
+        if !is_cap_article(tokens[i].word().as_str()) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < tokens.len() && is_cap_article(tokens[i].word().as_str()) {
+            i += 1;
+        }
+        let run = &tokens[start..i];
+        let from = if run.len() >= 3 { 2 } else { 1 };
+        for token in run.iter().skip(from) {
+            let lower = token.word().as_str().to_lowercase();
+            let s = token.span().start();
+            let e = token.span().end();
+            out.push(Suggestion::new(
+                "DE_CASE".to_string(),
+                "Kleinschreibung der Artikelreihe.".to_string(),
+                Span::new(s.byte..e.byte, s.char..e.char),
+                vec![lower],
+            ));
+        }
+    }
+    out
+}
+
+/// LT `RussianCompoundRule` (id `RU_COMPOUNDS`, resource
+/// ru/compounds.txt): entries marked `+` are words that must be written
+/// joined — the hyphenated form ("по-немногу") gets flagged with the
+/// joined form ("понемногу") as the suggestion.
+pub(crate) fn ru_compounds(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("ru") {
+        return Vec::new();
+    }
+    let map = static_ref!(
+        std::collections::HashMap<String, String> = {
+            let mut m = std::collections::HashMap::new();
+            for line in include_str!("builtin_data/ru/compounds.txt").lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') || !line.ends_with('+') {
+                    continue;
+                }
+                let hyphenated = line.trim_end_matches('+');
+                if hyphenated.contains('-') {
+                    m.insert(
+                        hyphenated.to_string(),
+                        hyphenated.chars().filter(|c| *c != '-').collect(),
+                    );
+                }
+            }
+            m
+        }
+    );
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    for token in &tokens {
+        let word = token.word().as_str();
+        // case-sensitive lookup with sentence-start capitalization fallback
+        let sugg = match map.get(word) {
+            Some(s) => Some(s.clone()),
+            None => {
+                // capitalize the lookup key if the token starts a sentence
+                let mut chars = word.chars();
+                match chars.next() {
+                    Some(first) if first.is_uppercase() => {
+                        let lower: String =
+                            first.to_lowercase().collect::<Vec<_>>().into_iter().chain(chars).collect();
+                        map.get(&lower).map(|s| {
+                            let mut out = String::new();
+                            if let Some(c) = s.chars().next() {
+                                out.extend(c.to_uppercase());
+                                out.push_str(&s[c.len_utf8()..]);
+                            }
+                            out
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        };
+        if let Some(joined) = sugg {
+            let start = token.span().start();
+            let end = token.span().end();
+            out.push(Suggestion::new(
+                "RU_COMPOUNDS".to_string(),
+                "Escribir sin guion.".to_string(),
+                Span::new(start.byte..end.byte, start.char..end.char),
+                vec![joined],
+            ));
+        }
+    }
+    out
 }
 
 /// LT `ArabicDiacriticsRule` (id `AR_DIACRITICS_REPLACE`,

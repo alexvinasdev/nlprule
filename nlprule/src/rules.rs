@@ -382,6 +382,14 @@ impl Rules {
             sentence,
             self.builtin_lang.as_deref(),
         ));
+        out.extend(crate::builtins::de_case(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::ru_compounds(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
         let tokens: Vec<_> = sentence.iter().collect();
         // SimpleReplaceRule phrase table (nl): case-sensitive multiword
         // lookup with sub-rule ids derived from the wrong phrase
@@ -428,72 +436,10 @@ impl Rules {
                 }
             }
         }
-        if tokens.len() < 2 {
-            return out;
-        }
-        // WORD_REPEAT_RULE: adjacent identical words. LT languages that
-        // subclass WordRepeatRule report it under their own id (the HTTP
-        // API exposes the subclass rule id).
-        let repeat_rule_id = match self.builtin_lang.as_deref() {
-            Some("de") => "GERMAN_WORD_REPEAT_RULE",
-            Some("es") => "SPANISH_WORD_REPEAT_RULE",
-            Some("fr") => "FRENCH_WORD_REPEAT_RULE",
-            Some("uk") => "UKRAINIAN_WORD_REPEAT_RULE",
-            Some("ca") => "CATALAN_WORD_REPEAT_RULE",
-            Some("pt") => "PORTUGUESE_WORD_REPEAT_RULE",
-            Some("it") => "ITALIAN_WORD_REPEAT_RULE",
-            _ => "WORD_REPEAT_RULE",
-        };
-        for pair in tokens.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            let ta = a.word().as_str();
-            let tb = b.word().as_str();
-            if !b.has_space_before() || ta.len() < 2 {
-                continue;
-            }
-            // GermanWordRepeatRule.ignore: case-specific exceptions
-            let german_ignore = self.builtin_lang.as_deref() == Some("de")
-                && matches!((ta, tb), ("Sie", "sie") | ("sie", "Sie") | ("Waren", "waren") | ("waren", "Waren"));
-            if ta.chars().all(char::is_alphabetic)
-                && ta.eq_ignore_ascii_case(tb)
-                && !german_ignore
-                && !matches!(ta.to_lowercase().as_str(), "that" | "had")
-            {
-                let span = Span::from_positions(a.span().start(), a.span().end());
-                let word = ta;
-                out.push(Suggestion::new(
-                    repeat_rule_id.to_string(),
-                    format!(
-                        "Possible typo: you repeated a word",
-                    ),
-                    span,
-                    vec![word.to_string()],
-                ));
-                break;
-            }
-        }
-        // DOUBLE_PUNCTUATION: doubled , ; : ! ?
-        for pair in tokens.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            let ta = a.word().as_str();
-            let tb = b.word().as_str();
-            if b.has_space_before() {
-                continue;
-            }
-            if ta.chars().count() == 1
-                && ta == tb
-                && [",", ";", ":", "!", "?"].contains(&ta)
-            {
-                let span = Span::from_positions(a.span().start(), b.span().end());
-                out.push(Suggestion::new(
-                    "DOUBLE_PUNCTUATION".to_string(),
-                    "Double punctuation.".to_string(),
-                    span,
-                    vec![ta.to_string()],
-                ));
-                break;
-            }
-        }
+        out.extend(crate::builtins::word_repeat(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
         out
     }
 
@@ -638,6 +584,41 @@ impl Rules {
         let mut prev_last_token: Option<String> = None;
         let mut prev_numbered_list = false;
 
+        // LT `SentenceWhitespaceRule` (id WHITESPACE_RULE, every language):
+        // a run of >=3 spaces after the last token of a sentence — at the
+        // end of the text or before the next sentence — is flagged from
+        // the second space on. Sentence text excludes trailing whitespace
+        // (tokenizer.rs contract), so this pass runs at text level.
+        let mut ws_text: Vec<Suggestion> = Vec::new();
+        for (i, sentence) in sentences.iter().enumerate() {
+            // token-based boundaries: the sentence slice may include
+            // trailing whitespace itself (tokenizer contract is undefined)
+            let last_tok_end = sentence
+                .iter()
+                .last()
+                .map(|t| t.span().byte().end)
+                .unwrap_or(sentence.span().byte().start);
+            let next_start = sentences
+                .get(i + 1)
+                .and_then(|s| s.iter().next().map(|t| t.span().byte().start))
+                .unwrap_or(text.len());
+            let tail = &text[last_tok_end.min(text.len())..next_start.min(text.len())];
+            let n = tail.bytes().take_while(|b| *b == b' ').count();
+            if n >= 3 {
+                let cs_start = sentence
+                    .iter()
+                    .last()
+                    .map(|t| t.span().char().end)
+                    .unwrap_or(0);
+                ws_text.push(Suggestion::new(
+                    "WHITESPACE_RULE".to_string(),
+                    "Trailing whitespace.".to_string(),
+                    Span::new((last_tok_end + 1)..(last_tok_end + n), (cs_start + 1)..(cs_start + n - 1)),
+                    vec![String::new()],
+                ));
+            }
+        }
+
         for (i, sentence) in sentences.iter().enumerate() {
             let ctx = crate::builtins::TextRuleContext {
                 is_only_sentence: sentences.len() == 1,
@@ -706,6 +687,7 @@ impl Rules {
             let _ = i;
         }
 
+        suggestions.extend(ws_text);
         suggestions
     }
 

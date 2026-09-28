@@ -247,8 +247,12 @@ def simple_replace_rules(tables):
             suggestions = "|".join(escape_xml(c) for c in corrects)
             display = escape_xml(corrects[0])
             token_xml = escape_xml(token)
+            rid = (
+                ' id="SIMPLE_%s"' % _simple_replace_ruleid(wrongs[0])
+                if lang in PER_WORD_SIMPLE_REPLACE else ""
+            )
             rules.append(
-                "<rule>\n"
+                f"<rule{rid}>\n"
                 f"<pattern><token regexp=\"yes\">{token_xml}</token></pattern>\n"
                 f"<message>Did you mean <suggestion>{suggestions}</suggestion>?</message>\n"
                 "</rule>"
