@@ -121,6 +121,17 @@ fn clean_overlapping(suggestions: Vec<Suggestion>, lang: Option<&str>) -> Vec<Su
             continue;
         }
 
+        // LT's HTTP API reports every firing rule for a span; exact-same-span
+        // suggestions from DIFFERENT rules are both kept (e.g. an XML rule
+        // and a builtin like DE_VERBAGREEMENT / es COMILLAS + ES_UNPAIRED)
+        if cur_from == prev_from && cur_to == prev_to && rule_match.source() != prev.source() {
+            clean.push(prev);
+            prev = rule_match;
+            let span = prev.span().char().clone();
+            prev_from = span.start;
+            prev_to = span.end;
+            continue;
+        }
         // overlapping: CleanOverlappingFilter semantics — language priority
         let priority_of = |sugg: &Suggestion| -> isize {
             crate::rule::priorities::priority_for_id(lang, sugg.source()) as isize
@@ -356,6 +367,18 @@ impl Rules {
             self.builtin_lang.as_deref(),
         ));
         out.extend(crate::builtins::french_whitespace(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::arabic_diacritics(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::de_verbagreement(
+            sentence,
+            self.builtin_lang.as_deref(),
+        ));
+        out.extend(crate::builtins::de_subject_verb_agreement(
             sentence,
             self.builtin_lang.as_deref(),
         ));

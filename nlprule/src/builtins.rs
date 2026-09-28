@@ -409,54 +409,48 @@ pub(crate) fn builtin_ids(
 /// the gate tables of the four ported functions.
 pub(crate) fn text_family_ids(lang: Option<&str>) -> Vec<&'static str> {
     let mut out = Vec::new();
-    const DOUBLE: &[&str] = &[
-        "ca", "es", "en", "fr", "pt", "ru", "pl", "it", "br", "eo", "ga",
-        "sk", "sl", "be", "el", "ro", "ta", "tl", "ast", "crh", "gl",
-    ];
-    const WHITESPACE: &[&str] = &[
-        "ca", "es", "ar", "ru", "uk", "pl", "it", "br", "eo", "ga", "sv",
-        "da", "sk", "sl", "be", "el", "fa", "ro", "ta", "crh", "gl",
-    ];
-    const COMMA: &[&str] = &[
-        "ca", "es", "en", "de", "fr", "ar", "ru", "uk", "pl", "it", "br",
-        "eo", "ga", "sv", "da", "sk", "sl", "be", "el", "fa", "ro", "tl",
-        "ast", "crh",
-    ];
-    if lang.map_or(false, |l| DOUBLE.contains(&l)) {
-        out.push("DOUBLE_PUNCTUATION");
+    let lang = match lang {
+        Some(l) => l,
+        None => return out,
+    };
+    if let Some(cfg) = text_cfg(lang) {
+        if !cfg.dbl.is_empty() {
+            out.push(cfg.dbl);
+        }
+        if cfg.ws {
+            out.push("WHITESPACE_RULE");
+        }
+        for id in [cfg.comma, cfg.comma_close_bracket, cfg.comma_open_bracket] {
+            if !id.is_empty() && !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        if let Some(u) = cfg.unp {
+            if u.brackets && !out.contains(&u.bracket_id) {
+                out.push(u.bracket_id);
+            }
+            if u.quotes && !out.contains(&u.quote_id) {
+                out.push(u.quote_id);
+            }
+        }
     }
-    if lang.map_or(false, |l| WHITESPACE.contains(&l)) {
-        out.push("WHITESPACE_RULE");
-    }
-    if lang.map_or(false, |l| COMMA.contains(&l)) {
-        out.push("COMMA_PARENTHESIS_WHITESPACE");
-    }
-    if lang == Some("en") {
+    if lang == "en" {
         out.push("EN_A_VS_AN");
     }
-    if lang == Some("ar") {
+    if lang == "ar" {
         out.push("ARABIC_QM_WHITESPACE");
         out.push("ARABIC_SC_WHITESPACE");
+        out.push("AR_DIACRITICS_REPLACE");
     }
-    if lang == Some("es") {
+    if lang == "de" {
+        out.push("DE_VERBAGREEMENT");
+        out.push("DE_SUBJECT_VERB_AGREEMENT");
+    }
+    if lang == "es" {
         out.push("ES_QUESTION_MARK");
     }
-    if lang == Some("fr") {
+    if lang == "fr" {
         out.push("FRENCH_WHITESPACE");
-    }
-    match lang {
-        Some("en") => out.push("EN_UNPAIRED_QUOTES"),
-        Some("es") => out.push("ES_UNPAIRED_BRACKETS"),
-        Some(l)
-            if matches!(
-                l,
-                "ca" | "ar" | "pt" | "gl" | "eo" | "ga" | "sv" | "da" | "sl" | "tl" | "ast"
-                    | "de" | "fr" | "it" | "ro" | "sk"
-            ) =>
-        {
-            out.push("UNPAIRED_BRACKETS");
-        }
-        _ => {}
     }
     out
 }
@@ -982,6 +976,240 @@ pub(crate) fn es_question_mark(sentence: &Sentence, lang: Option<&str>) -> Vec<S
     )]
 }
 
+/// LT `ArabicDiacriticsRule` (id `AR_DIACRITICS_REPLACE`,
+/// AbstractSimpleReplaceRule2 over rules/ar/diacritics.txt): plain
+/// (undiacritized) words and short phrases that have a canonical
+/// diacritized form get flagged with the diacritized replacement.
+pub(crate) fn arabic_diacritics(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("ar") {
+        return Vec::new();
+    }
+    // phrase (Vec of words) -> primary diacritized suggestion
+    let map = static_ref!(
+        std::collections::HashMap<Vec<String>, String> = {
+            let mut m = std::collections::HashMap::new();
+            for line in include_str!("builtin_data/ar/diacritics.txt").lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') || !line.contains('=') {
+                    continue;
+                }
+                let (key, vals) = line.split_once('=').unwrap();
+                let first = vals.split('\t').next().unwrap_or("");
+                let first = first.split('|').next().unwrap_or("").trim();
+                if first.is_empty() {
+                    continue;
+                }
+                m.insert(
+                    key.split_whitespace().map(str::to_string).collect::<Vec<_>>(),
+                    first.to_string(),
+                );
+            }
+            m
+        }
+    );
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        // try the longest phrase first (max 3 words in the data)
+        for len in (1..=3usize).rev() {
+            if i + len > tokens.len() {
+                continue;
+            }
+            let phrase: Vec<String> = tokens[i..i + len]
+                .iter()
+                .map(|t| t.word().as_str().to_string())
+                .collect();
+            if let Some(sugg) = map.get(&phrase) {
+                let start = tokens[i].span().start();
+                let end = tokens[i + len - 1].span().end();
+                out.push(Suggestion::new(
+                    "AR_DIACRITICS_REPLACE".to_string(),
+                    "Sustituir por la forma diacritizada.".to_string(),
+                    Span::new(start.byte..end.byte, start.char..end.char),
+                    vec![sugg.clone()],
+                ));
+                i += len;
+                break;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// LT `SubjectVerbAgreementRule` (id `DE_SUBJECT_VERB_AGREEMENT`):
+/// "Die Kinder ist ..." — plural subject (die + plural noun) with a
+/// singular form of *sein*; suggests the plural form on the verb span.
+/// Bounded approximation of LT's POS-based rule: determiner `die` +
+/// noun ending in the productive German plural markers er/en.
+pub(crate) fn de_subject_verb_agreement(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("de") {
+        return Vec::new();
+    }
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    for i in 1..tokens.len().saturating_sub(1) {
+        let det = tokens[i - 1].word().as_str();
+        let noun = tokens[i].word().as_str();
+        let verb = tokens[i + 1].word().as_str();
+        if (det != "Die" && det != "die") || noun.chars().count() < 4 {
+            continue;
+        }
+        let plural = noun.ends_with("er") || noun.ends_with("en");
+        if !plural {
+            continue;
+        }
+        let replacement = match verb {
+            "ist" | "bin" | "bist" => "sind",
+            _ => continue,
+        };
+        let start = tokens[i + 1].span().start();
+        let end = tokens[i + 1].span().end();
+        out.push(Suggestion::new(
+            "DE_SUBJECT_VERB_AGREEMENT".to_string(),
+            "Subjekt und Verb stimmen nicht überein.".to_string(),
+            Span::new(start.byte..end.byte, start.char..end.char),
+            vec![replacement.to_string()],
+        ));
+    }
+    out
+}
+
+/// LT `VerbAgreementRule` (id `DE_VERBAGREEMENT`): personal pronoun
+/// followed by a finite verb with the wrong person ("Ich sind", "Wir
+/// sagt"). Bounded approximation: sein/haben/werden paradigms exact;
+/// regular verbs by ending class (e/st/t/est/et/en). `ihr`/`Sie` are
+/// skipped like LT does; `sie` accepts both singular and plural forms.
+pub(crate) fn de_verbagreement(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
+    if lang != Some("de") {
+        return Vec::new();
+    }
+    // (1sg, 2sg, 3sg, 1pl, 2pl)
+    const SEIN: [&str; 5] = ["bin", "bist", "ist", "sind", "seid"];
+    const HABEN: [&str; 5] = ["habe", "hast", "hat", "haben", "habt"];
+    const WERDEN: [&str; 5] = ["werde", "wirst", "wird", "werden", "werdet"];
+    // person index for each pronoun (None = skip); sentence-start
+    // capitalized forms are accepted via lowercase comparison
+    let person = |p: &str| -> Option<usize> {
+        let p = p.to_lowercase();
+        match p.as_str() {
+            "ich" => Some(0),
+            "du" => Some(1),
+            "er" | "es" => Some(2),
+            "sie" => None, // ambiguous 3sg/3pl: only via table below
+            "wir" => Some(3),
+            _ => None,
+        }
+    };
+    let tokens: Vec<_> = sentence.iter().collect();
+    let mut out = Vec::new();
+    for i in 0..tokens.len().saturating_sub(1) {
+        let pron = tokens[i].word().as_str();
+        let verb = tokens[i + 1].word().as_str();
+        if verb.is_empty() {
+            continue;
+        }
+        // correct form from the irregular tables
+        let table_form = if SEIN.contains(&verb) {
+            Some(SEIN)
+        } else if HABEN.contains(&verb) {
+            Some(HABEN)
+        } else if WERDEN.contains(&verb) {
+            Some(WERDEN)
+        } else {
+            None
+        };
+        if let Some(table) = table_form {
+            let correct: Option<usize> = match person(pron) {
+                Some(p) => Some(p),
+                None if pron.to_lowercase() == "sie" => {
+                    // she -> 3sg, they -> 1pl row index 3
+                    if table[2] == verb || table[3] == verb {
+                        None // agrees with one of the readings
+                    } else {
+                        Some(2)
+                    }
+                }
+                None => None,
+            };
+            if let Some(p) = correct {
+                if table[p] != verb {
+                    let start = tokens[i].span().start();
+                    let end = tokens[i + 1].span().end();
+                    out.push(Suggestion::new(
+                        "DE_VERBAGREEMENT".to_string(),
+                        "Subjekt und Verb stimmen nicht überein.".to_string(),
+                        Span::new(start.byte..end.byte, start.char..end.char),
+                        vec![format!("{} {}", pron, table[p])],
+                    ));
+                }
+            }
+            continue;
+        }
+        // regular verb: classify by ending
+        let Some(p) = person(pron) else { continue };
+        let stem: &str;
+        let observed: usize; // 0=1sg e, 1=2sg st, 2=3sg t, 3=pl en
+        if let Some(s) = verb.strip_suffix("en") {
+            stem = s;
+            observed = 3;
+        } else if let Some(s) = verb.strip_suffix("est") {
+            stem = s;
+            observed = 1;
+        } else if let Some(s) = verb.strip_suffix("st") {
+            stem = s;
+            observed = 1;
+        } else if let Some(s) = verb.strip_suffix("et") {
+            stem = s;
+            observed = 2;
+        } else if let Some(s) = verb.strip_suffix('e') {
+            stem = s;
+            observed = 0;
+        } else if let Some(s) = verb.strip_suffix('t') {
+            stem = s;
+            observed = 2;
+        } else {
+            continue; // not recognizably finite: skip
+        }
+        if stem.is_empty() {
+            continue;
+        }
+        let expected: &str = match p {
+            0 => "e",
+            1 => "st",
+            2 => "t",
+            _ => "en",
+        };
+        if observed == p {
+            continue;
+        }
+        // avoid nonsense like flagging 1sg "e" verbs after 3sg pronoun when
+        // the observed form already matches the expected ending
+        let same_ending = match (observed, p) {
+            (0, 0) | (1, 1) | (2, 2) | (3, 3) => true,
+            _ => false,
+        };
+        if same_ending {
+            continue;
+        }
+        let replacement = format!("{}{}", stem, expected);
+        // skip unlikely rewrites that reproduce the observed form
+        if replacement == verb {
+            continue;
+        }
+        let start = tokens[i].span().start();
+        let end = tokens[i + 1].span().end();
+        out.push(Suggestion::new(
+            "DE_VERBAGREEMENT".to_string(),
+            "Subjekt und Verb stimmen nicht überein.".to_string(),
+            Span::new(start.byte..end.byte, start.char..end.char),
+            vec![format!("{} {}", pron, replacement)],
+        ));
+    }
+    out
+}
+
 /// LT `FrenchQuestionWhitespaceRule` family (id `FRENCH_WHITESPACE`):
 /// French punctuation !, ?, ;, : must be preceded by a (narrow)
 /// non-breaking space. Fires when there is NO space at all; the
@@ -1168,13 +1396,245 @@ pub(crate) fn a_vs_an(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion
     out
 }
 
+// ---------------------------------------------------------------------------
+// Text-level builtin families (task-4), empirically aligned with the local
+// LT 6.5: per-language rule IDs, glue semantics for unpaired brackets
+// (brackets separated from words by whitespace are the comma-whitespace
+// family's business in most languages), and language-specific comma-/
+// bracket-whitespace ids. Probe tables in delta_log (`family_battery`).
+
+struct UnpairedCfg {
+    brackets: bool,
+    quotes: bool,
+    guillemets: bool,
+    bracket_id: &'static str,
+    quote_id: &'static str,
+    /// only fire when the bracket/quote is glued to an adjacent word;
+    /// LT's UnpairedBracketsRule ignores whitespace-separated brackets
+    /// (then CommaWhitespaceRule fires instead). de/km flag spaced ones.
+    glued_only: bool,
+}
+
+struct TextCfg {
+    unp: Option<UnpairedCfg>,
+    dbl: &'static str,
+    ws: bool,
+    /// whitespace before , ; : . ! ?
+    comma: &'static str,
+    /// whitespace before ) ] }
+    comma_close_bracket: &'static str,
+    /// whitespace after ( [ {
+    comma_open_bracket: &'static str,
+}
+
+fn text_cfg(lang: &str) -> Option<TextCfg> {
+    let generic_unp = |brackets: bool, quotes: bool| UnpairedCfg {
+        brackets,
+        quotes,
+        guillemets: false,
+        bracket_id: "UNPAIRED_BRACKETS",
+        quote_id: "UNPAIRED_BRACKETS",
+        glued_only: true,
+    };
+    let cws = "COMMA_PARENTHESIS_WHITESPACE";
+    Some(match lang {
+        "ca" | "eo" | "ga" | "sl" | "tl" | "ast" | "da" | "sv" | "nl" => TextCfg {
+            unp: Some(generic_unp(true, true)),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: !matches!(lang, "nl"),
+            // nl: no check before , ; : but brackets-whitespace fires CWS
+            comma: if lang == "nl" { "" } else { cws },
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        "es" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: true,
+                bracket_id: "ES_UNPAIRED_BRACKETS",
+                quote_id: "ES_UNPAIRED_BRACKETS",
+                glued_only: true,
+            }),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: true,
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        "el" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: false,
+                bracket_id: "EL_UNPAIRED_BRACKETS",
+                quote_id: "EL_UNPAIRED_BRACKETS",
+                glued_only: true,
+            }),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: true,
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        "pl" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: false,
+                bracket_id: "PL_UNPAIRED_BRACKETS",
+                quote_id: "PL_UNPAIRED_BRACKETS",
+                glued_only: true,
+            }),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: true,
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        "ru" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: false,
+                bracket_id: "RU_UNPAIRED_BRACKETS",
+                quote_id: "RU_UNPAIRED_BRACKETS",
+                glued_only: true,
+            }),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: true,
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        // en has two rules: EN_UNPAIRED_BRACKETS (brackets) and
+        // EN_UNPAIRED_QUOTES (straight quotes)
+        "en" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: false,
+                bracket_id: "EN_UNPAIRED_BRACKETS",
+                quote_id: "EN_UNPAIRED_QUOTES",
+                glued_only: true,
+            }),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: false,
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        // de flags spaced brackets as UNPAIRED too (no glue rule) and has
+        // a separate quotes rule id
+        "de" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: false,
+                bracket_id: "UNPAIRED_BRACKETS",
+                quote_id: "DE_UNPAIRED_QUOTES",
+                glued_only: false,
+            }),
+            dbl: "DE_DOUBLE_PUNCTUATION",
+            ws: false,
+            comma: cws,
+            comma_close_bracket: "",
+            comma_open_bracket: "",
+        },
+        // km flags every unpaired bracket/quote (glued or not) and has no
+        // comma-whitespace family
+        "km" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: false,
+                bracket_id: "KM_UNPAIRED_BRACKETS",
+                quote_id: "KM_UNPAIRED_BRACKETS",
+                glued_only: false,
+            }),
+            dbl: "",
+            ws: false,
+            comma: "",
+            comma_close_bracket: "",
+            comma_open_bracket: "",
+        },
+        // ar: bracket-whitespace reports under the Arabic id
+        "ar" => TextCfg {
+            unp: Some(UnpairedCfg {
+                brackets: true,
+                quotes: true,
+                guillemets: false,
+                bracket_id: "UNPAIRED_BRACKETS",
+                quote_id: "UNPAIRED_BRACKETS",
+                glued_only: true,
+            }),
+            dbl: "ARABIC_DOUBLE_PUNCTUATION",
+            ws: true,
+            comma: cws,
+            comma_close_bracket: "ARABIC_SC_WHITESPACE",
+            comma_open_bracket: "ARABIC_SC_WHITESPACE",
+        },
+        // gl: ws before basic punctuation is SPACE_BEFORE_PUNCTUATION, no
+        // check after '('
+        "gl" => TextCfg {
+            unp: Some(generic_unp(true, true)),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: true,
+            comma: "SPACE_BEFORE_PUNCTUATION",
+            comma_close_bracket: cws,
+            comma_open_bracket: "",
+        },
+        // pt: SPACE_BEFORE_PUNCTUATION2 for basic punctuation
+        "pt" => TextCfg {
+            unp: Some(generic_unp(true, true)),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: false,
+            comma: "SPACE_BEFORE_PUNCTUATION2",
+            comma_close_bracket: cws,
+            comma_open_bracket: "",
+        },
+        // brackets only (no straight-quote pairing)
+        "fr" | "it" | "ro" | "sk" => TextCfg {
+            unp: Some(generic_unp(true, false)),
+            dbl: "DOUBLE_PUNCTUATION",
+            ws: matches!(lang, "it" | "ro" | "sk"),
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        // no unpaired family
+        "be" | "br" | "crh" | "ta" | "fa" => TextCfg {
+            unp: None,
+            dbl: if lang == "fa" {
+                "PERSIAN_DOUBLE_PUNCTUATION"
+            } else {
+                "DOUBLE_PUNCTUATION"
+            },
+            ws: true,
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        "uk" => TextCfg {
+            unp: None,
+            dbl: "",
+            ws: true,
+            comma: cws,
+            comma_close_bracket: cws,
+            comma_open_bracket: cws,
+        },
+        _ => return None,
+    })
+}
+
+/// LT `DoublePunctuationRule` family (ids vary per language).
 pub(crate) fn double_punctuation(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
-    const LANGS: &[&str] = &[
-        "ca", "es", "en", "fr", "pt", "ru", "pl", "it", "br", "eo", "ga",
-        "sk", "sl", "be", "el", "ro", "ta", "tl", "ast", "crh", "gl",
-    ];
     let lang = match lang {
-        Some(l) if LANGS.contains(&l) => l,
+        Some(l) => l,
+        _ => return Vec::new(),
+    };
+    let cfg = match text_cfg(lang) {
+        Some(c) if !c.dbl.is_empty() => c,
         _ => return Vec::new(),
     };
     let tokens: Vec<_> = sentence.iter().collect();
@@ -1212,7 +1672,7 @@ pub(crate) fn double_punctuation(sentence: &Sentence, lang: Option<&str>) -> Vec
         let start = tokens[i - 1].span().start();
         let end = tokens[i].span().end();
         out.push(Suggestion::new(
-            "DOUBLE_PUNCTUATION".to_string(),
+            cfg.dbl.to_string(),
             "Double punctuation.".to_string(),
             Span::new(start.byte..end.byte, start.char..end.char),
             vec![token.to_string()],
@@ -1224,13 +1684,10 @@ pub(crate) fn double_punctuation(sentence: &Sentence, lang: Option<&str>) -> Vec
 /// LT `MultipleWhitespaceRule` (id `WHITESPACE_RULE`): a run of 2+ spaces
 /// between two non-whitespace tokens.
 pub(crate) fn multiple_whitespace(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
-    const LANGS: &[&str] = &[
-        "ca", "es", "ar", "ru", "uk", "pl", "it", "br", "eo", "ga", "sv",
-        "da", "sk", "sl", "be", "el", "fa", "ro", "ta", "crh", "gl",
-    ];
-    if !lang.map_or(false, |l| LANGS.contains(&l)) {
-        return Vec::new();
-    }
+    let cfg = match lang.map_or_else(|| None, |l| text_cfg(l)) {
+        Some(c) if c.ws => c,
+        _ => return Vec::new(),
+    };
     // the tokenizer does not emit whitespace tokens: runs of spaces live in
     // the gaps between consecutive tokens
     let tokens: Vec<_> = sentence.iter().collect();
@@ -1259,21 +1716,19 @@ pub(crate) fn multiple_whitespace(sentence: &Sentence, lang: Option<&str>) -> Ve
     out
 }
 
-/// LT `CommaWhitespaceRule` (id `COMMA_PARENTHESIS_WHITESPACE`):
-/// whitespace directly before closing punctuation or after opening
-/// punctuation.
+/// LT `CommaWhitespaceRule` family: whitespace directly before closing
+/// punctuation / after opening punctuation. Ids vary per language
+/// (SPACE_BEFORE_PUNCTUATION for gl, SPACE_BEFORE_PUNCTUATION2 for pt,
+/// ARABIC_SC_WHITESPACE for brackets in ar) and some languages check only
+/// a subset of the positions.
 pub(crate) fn comma_parenthesis_whitespace(
     sentence: &Sentence,
     lang: Option<&str>,
 ) -> Vec<Suggestion> {
-    const LANGS: &[&str] = &[
-        "ca", "es", "en", "de", "fr", "ar", "ru", "uk", "pl", "it", "br",
-        "eo", "ga", "sv", "da", "sk", "sl", "be", "el", "fa", "ro", "tl",
-        "ast", "crh",
-    ];
-    if !lang.map_or(false, |l| LANGS.contains(&l)) {
-        return Vec::new();
-    }
+    let cfg = match lang.map_or_else(|| None, |l| text_cfg(l)) {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
     let tokens: Vec<_> = sentence.iter().collect();
     let text = sentence.text();
     let mut out = Vec::new();
@@ -1293,86 +1748,59 @@ pub(crate) fn comma_parenthesis_whitespace(
         let prev_word = tokens[i].word().as_str();
         let next_word = tokens[i + 1].word().as_str();
         // whitespace directly before closing punctuation
-        let before_punct = next_word.starts_with(',')
+        let basic = next_word.starts_with(',')
             || next_word.starts_with(';')
             || next_word.starts_with(':')
             || next_word.starts_with('.')
             || next_word.starts_with('!')
-            || next_word.starts_with('?')
-            || next_word.starts_with(')')
-            || next_word.starts_with(']')
-            || next_word.starts_with('}');
+            || next_word.starts_with('?');
+        let close_bracket =
+            next_word.starts_with(')') || next_word.starts_with(']') || next_word.starts_with('}');
         // whitespace directly after an opening bracket
-        let after_open = prev_word == "(" || prev_word == "[" || prev_word == "{";
-        if before_punct || after_open {
-            let replacement = if before_punct {
-                vec![next_word.chars().take(1).collect()]
-            } else {
-                Vec::new()
-            };
-            out.push(Suggestion::new(
-                "COMMA_PARENTHESIS_WHITESPACE".to_string(),
-                "Probable falta de espacio.".to_string(),
-                Span::new(bs..be, cs..ce),
-                replacement,
-            ));
-        }
+        let open_bracket = prev_word == "(" || prev_word == "[" || prev_word == "{";
+        let (id, replacement) = if basic && !cfg.comma.is_empty() {
+            (cfg.comma, vec![next_word.chars().take(1).collect()])
+        } else if close_bracket && !cfg.comma_close_bracket.is_empty() {
+            (cfg.comma_close_bracket, vec![")".to_string()])
+        } else if open_bracket && !cfg.comma_open_bracket.is_empty() {
+            (cfg.comma_open_bracket, Vec::new())
+        } else {
+            continue;
+        };
+        out.push(Suggestion::new(
+            id.to_string(),
+            "Probable falta de espacio.".to_string(),
+            Span::new(bs..be, cs..ce),
+            replacement,
+        ));
     }
     out
 }
 
 /// LT `*UnpairedBracketsRule` families: unmatched (), [], {} (and straight
-/// double quotes where the language pairs them). en runs a quotes-only
-/// variant with its own id (`EN_UNPAIRED_QUOTES`).
+/// double quotes where the language pairs them). Per-language ids, and the
+/// glue rule: in most languages the bracket must be attached to a word —
+/// whitespace-separated brackets are flagged by the comma-whitespace family
+/// instead. de and km flag spaced brackets themselves.
 pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<Suggestion> {
-    struct Cfg {
-        brackets: bool,
-        quotes: bool,
-        guillemets: bool,
-        id: &'static str,
-    }
-    let cfg = match lang {
-        Some("en") => Some(Cfg {
-            brackets: false,
-            quotes: true,
-            guillemets: false,
-            id: "EN_UNPAIRED_QUOTES",
-        }),
-        // es runs SpanishUnpairedBracketsRule (ES_UNPAIRED_BRACKETS) with
-        // brackets, straight quotes and guillemets (probed on LT 6.5)
-        Some("es") => Some(Cfg {
-            brackets: true,
-            quotes: true,
-            guillemets: true,
-            id: "ES_UNPAIRED_BRACKETS",
-        }),
-        Some(l)
-            if matches!(
-                l,
-                "ca" | "ar" | "pt" | "gl" | "eo" | "ga" | "sv" | "da" | "sl" | "tl" | "ast"
-            ) =>
-        {
-            Some(Cfg {
-                brackets: true,
-                quotes: true,
-                guillemets: false,
-                id: "UNPAIRED_BRACKETS",
-            })
-        }
-        Some(l) if matches!(l, "de" | "fr" | "it" | "ro" | "sk") => Some(Cfg {
-            brackets: true,
-            quotes: false,
-            guillemets: false,
-            id: "UNPAIRED_BRACKETS",
-        }),
-        _ => None,
-    };
-    let cfg = match cfg {
+    let cfg = match lang.map_or_else(|| None, |l| text_cfg(l)) {
         Some(c) => c,
+        None => return Vec::new(),
+    };
+    let cfg = match cfg.unp {
+        Some(u) => u,
         None => return Vec::new(),
     };
 
     let tokens: Vec<_> = sentence.iter().collect();
+    // byte gap between token i and i+1 is empty => glued
+    let glued_left = |i: usize| -> bool {
+        i > 0 && tokens[i].span().start().byte == tokens[i - 1].span().end().byte
+    };
+    let glued_right = |i: usize| -> bool {
+        i + 1 < tokens.len() && tokens[i + 1].span().start().byte == tokens[i].span().end().byte
+    };
+
     let mut out = Vec::new();
     // bracket stack: (token index, closer)
     let mut stack: Vec<(usize, char)> = Vec::new();
@@ -1381,31 +1809,41 @@ pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<
 
     for (i, token) in tokens.iter().enumerate() {
         let word = token.word().as_str();
-        for c in word.chars() {
+        for (pos, c) in word.char_indices() {
+            // a char is "glued" when attached to word content in the same
+            // token, or to the neighbouring token without whitespace
+            let at_start = pos == 0;
+            let at_end = pos + c.len_utf8() >= word.len();
+            let glue_open = !at_end || glued_right(i);
+            let glue_close = !at_start || glued_left(i);
+            let glue_either = glue_open || glue_close;
+            let mut flag = |id: &'static str, msg: &'static str| {
+                let start = token.span().start();
+                let end = token.span().end();
+                out.push(Suggestion::new(
+                    id.to_string(),
+                    msg.to_string(),
+                    Span::new(start.byte..end.byte, start.char..end.char),
+                    Vec::new(),
+                ));
+            };
             if cfg.brackets {
                 match c {
-                    '(' => stack.push((i, ')')),
-                    '[' => stack.push((i, ']')),
-                    '{' => stack.push((i, '}')),
-                    ')' | ']' | '}' => {
+                    '(' if glue_open || !cfg.glued_only => stack.push((i, ')')),
+                    '[' if glue_open || !cfg.glued_only => stack.push((i, ']')),
+                    '{' if glue_open || !cfg.glued_only => stack.push((i, '}')),
+                    ')' | ']' | '}' if glue_close || !cfg.glued_only => {
                         // pop the matching opener; unmatched closer flags here
-                        if let Some(pos) = stack.iter().rposition(|(_, cl)| *cl == c) {
-                            stack.remove(pos);
+                        if let Some(p) = stack.iter().rposition(|(_, cl)| *cl == c) {
+                            stack.remove(p);
                         } else {
-                            let start = token.span().start();
-                            let end = token.span().end();
-                            out.push(Suggestion::new(
-                                cfg.id.to_string(),
-                                "Unpaired closing bracket.".to_string(),
-                                Span::new(start.byte..end.byte, start.char..end.char),
-                                Vec::new(),
-                            ));
+                            flag(cfg.bracket_id, "Unpaired closing bracket.");
                         }
                     }
                     _ => {}
                 }
             }
-            if cfg.quotes && c == '"' {
+            if cfg.quotes && c == '"' && (glue_either || !cfg.glued_only) {
                 match quote_open.take() {
                     Some(_) => {}
                     None => quote_open = Some(i),
@@ -1413,19 +1851,12 @@ pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<
             }
             if cfg.guillemets {
                 match c {
-                    '«' => stack.push((i, '»')),
-                    '»' => {
-                        if let Some(pos) = stack.iter().rposition(|(_, cl)| *cl == c) {
-                            stack.remove(pos);
+                    '«' if glue_open || !cfg.glued_only => stack.push((i, '»')),
+                    '»' if glue_close || !cfg.glued_only => {
+                        if let Some(p) = stack.iter().rposition(|(_, cl)| *cl == c) {
+                            stack.remove(p);
                         } else {
-                            let start = token.span().start();
-                            let end = token.span().end();
-                            out.push(Suggestion::new(
-                                cfg.id.to_string(),
-                                "Unpaired closing guillemet.".to_string(),
-                                Span::new(start.byte..end.byte, start.char..end.char),
-                                Vec::new(),
-                            ));
+                            flag(cfg.bracket_id, "Unpaired closing guillemet.");
                         }
                     }
                     _ => {}
@@ -1434,18 +1865,25 @@ pub(crate) fn unpaired_brackets(sentence: &Sentence, lang: Option<&str>) -> Vec<
         }
     }
     // unmatched openers remain on the stack / in quote_open
-    let mut offenders: Vec<usize> = stack.iter().map(|(i, _)| *i).collect();
-    if let Some(i) = quote_open {
-        offenders.push(i);
-    }
-    offenders.sort_unstable();
-    offenders.dedup();
-    for i in offenders {
+    let mut bracket_offenders: Vec<usize> = stack.iter().map(|(i, _)| *i).collect();
+    bracket_offenders.sort_unstable();
+    bracket_offenders.dedup();
+    for i in bracket_offenders {
         let start = tokens[i].span().start();
         let end = tokens[i].span().end();
         out.push(Suggestion::new(
-            cfg.id.to_string(),
+            cfg.bracket_id.to_string(),
             "Unpaired opening bracket.".to_string(),
+            Span::new(start.byte..end.byte, start.char..end.char),
+            Vec::new(),
+        ));
+    }
+    if let Some(i) = quote_open {
+        let start = tokens[i].span().start();
+        let end = tokens[i].span().end();
+        out.push(Suggestion::new(
+            cfg.quote_id.to_string(),
+            "Unpaired opening quote.".to_string(),
             Span::new(start.byte..end.byte, start.char..end.char),
             Vec::new(),
         ));
