@@ -631,6 +631,10 @@ fn spelling_ignored(word: &str, config: &SpellingRuleConfig) -> bool {
     if !has_letter {
         return true;
     }
+    // LT's spellers ignore mixed digit-letter tokens ("25°C", "3rd")
+    if word.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
     let is_ignored = |w: &str| config.ignore.contains(&w);
     if word.ends_with('.') && !is_ignored(word) {
         return is_ignored(word.strip_suffix('.').unwrap_or(word));

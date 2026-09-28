@@ -374,15 +374,11 @@ mod regex {
             while i < b.len() {
                 let c = b[i];
                 if c == b'\\' && i + 1 < b.len() {
-                    let seq_len = if b[i + 1] == b'b' || b[i + 1] == b'B' || b[i + 1] == b'A'
-                        || b[i + 1] == b'z' || b[i + 1] == b'Z'
-                    {
-                        2
-                    } else {
-                        utf8_char_len(b[i + 1]) + 1
-                    };
-                    // `\b*`, `\A+`, ...: keep the anchor, drop quantifier(s)
-                    if seq_len == 2
+                    // `\b*`, `\A+`, ...: keep the anchor, drop quantifier(s).
+                    // ONLY actual zero-width anchors — NOT arbitrary escaped
+                    // chars (`\d+`, `\-?`, ... must keep their quantifier)
+                    let is_anchor = matches!(b[i + 1], b'b' | b'B' | b'A' | b'z' | b'Z');
+                    if is_anchor
                         && class_depth == 0
                         && i + 2 < b.len()
                         && (b[i + 2] == b'?'
@@ -395,6 +391,7 @@ mod regex {
                         i += if i + 1 < b.len() && b[i + 1] == b'?' { 2 } else { 1 };
                         continue;
                     }
+                    let seq_len = utf8_char_len(b[i + 1]) + 1;
                     out.push_str(&regex[i..i + seq_len]);
                     i += seq_len;
                     continue;
