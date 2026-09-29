@@ -34,6 +34,8 @@ Environment:
 """
 
 import bisect
+import email
+import email.policy
 import json
 import os
 import re
@@ -308,24 +310,39 @@ class Handler(BaseHTTPRequestHandler):
     # -- param plumbing ---------------------------------------------------
 
     def _params(self):
-        """Merge query string and body (form-encoded or JSON) params."""
+        """Merge query string and body (form-encoded, multipart or JSON)."""
         params = {}
         qs = urlsplit(self.path).query
         if qs:
             params.update(parse_qs(qs, keep_blank_values=True))
         length = int(self.headers.get("Content-Length", "0") or 0)
-        if length:
-            body = self.rfile.read(length)
-            ctype = (self.headers.get("Content-Type") or "").lower()
-            if "json" in ctype:
-                try:
-                    obj = json.loads(body or b"{}")
-                    for k, v in obj.items():
-                        params[k] = [str(v)]
-                except json.JSONDecodeError:
-                    pass
-            else:
-                params.update(parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True))
+        if not length:
+            return params
+        body = self.rfile.read(length)
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        if "json" in ctype:
+            try:
+                obj = json.loads(body or b"{}")
+                for k, v in obj.items():
+                    params[k] = [str(v)]
+            except json.JSONDecodeError:
+                pass
+        elif "multipart/form-data" in ctype:
+            # the LT browser extension posts multipart/form-data (fetch
+            # FormData); parse it with the stdlib email parser
+            msg = email.message_from_bytes(
+                b"Content-Type: "
+                + self.headers.get("Content-Type", "").encode("latin-1", "replace")
+                + b"\r\n\r\n"
+                + body
+            )
+            for part in msg.get_payload() if msg.is_multipart() else []:
+                name = part.get_param("name", header="content-disposition")
+                if name:
+                    value = part.get_payload(decode=True) or b""
+                    params[name] = [value.decode("utf-8", "replace")]
+        else:
+            params.update(parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True))
         return params
 
     # -- handlers ---------------------------------------------------------
@@ -359,14 +376,26 @@ class Handler(BaseHTTPRequestHandler):
         params = self._params()
         text = params.get("text", [""])[0]
         if not text:
-            self._send(400, {"error": 'missing "text"'})
+            sys.stderr.write(
+                "400 missing text: ctype=%r keys=%r\n"
+                % (self.headers.get("Content-Type"), sorted(params))
+            )
+            self._send(
+                400,
+                {"error": 'missing "text"', "message": 'missing "text"'},
+            )
             return
         lang = normalize_lang(params.get("language", params.get("lang", [""]))[0], text)
         if lang is None:
+            requested = params.get("language", [""])[0]
+            sys.stderr.write(
+                "400 unsupported language %r: keys=%r\n" % (requested, sorted(params))
+            )
             self._send(
                 400,
                 {
-                    "message": f"Unsupported language {params.get('language', [''])[0]!r}",
+                    "message": f"Unsupported language {requested!r}",
+                    "error": f"Unsupported language {requested!r}",
                     "supported": LANGS,
                 },
             )
