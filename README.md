@@ -77,6 +77,79 @@ The only unported rule families are the 11 ngram-based ones (`CONFUSION_*`, `Ngr
 
 **Reproducing:** compile inputs (`data2/<lang>/grammar.xml` + tagger dumps + speller wordlists) and verification tooling (coverage audit, compare runners, delta log) live in the companion working repo; this repo contains the Rust workspace — build with `cargo build --release --features "compile,bin,zh,ja"`.
 
+## Docker
+
+The repo ships a multi-stage `Dockerfile` that builds the workspace with the documented feature set (`compile bin zh ja`) and installs all binaries (`compile`, `test`, `run`, `check_server`, `bench`, `debug_filters`, `test_disambiguation`, `opennlp_to_chunker`) on `PATH`. The rule binaries under `storage/` total roughly 5.6 GB across all 35 languages, so they are **not** baked into the image — mount the host `storage/` directory at `/storage` instead:
+
+```sh
+cd nlprule-fork
+docker build -t nlprule-all .
+echo "She have a test." | docker run -i --rm -v "$PWD/storage:/storage:ro" nlprule-all en
+# {"i":0,"text":"She have a test.","hits":[["HAVE_VBZ_EN",4,8,"has"]]}
+```
+
+The entrypoint accepts:
+
+- `<lang>` — run `check_server` over stdin (one sentence per line), printing one JSON object per line with the rule IDs, spans and first replacement that fired. This is the same protocol the comparison harness uses.
+- `dump-rules <lang>` — print the loaded-rule inventory as JSON (same output `scripts/coverage_audit.py` consumes).
+- `<tokenizer.bin> <rules.bin> [lang]` — run `check_server` against explicit bin paths.
+- `sh` / `bash` — drop into a shell with every binary available, e.g. to recompile a language inside the container:
+
+```sh
+docker run --rm -it \
+  -v "$PWD/../data2:/data2:ro" -v "$PWD/storage:/storage" \
+  -e NLPRULE_DATE_ANCHOR=2014-01-01 nlprule-all sh
+compile --build-dir /data2/en --tokenizer-out /storage/en_tokenizer.bin --rules-out /storage/en_rules.bin
+test --tokenizer /storage/en_tokenizer.bin --rules /storage/en_rules.bin
+```
+
+`NLPRULE_ENABLE="CAT/GROUP/N,..."` is passed through to activate `default="off"` rules. A `docker-compose.yml` is included for the mount-and-run setup (`docker compose run -T nlprule en < sentences.txt`).
+
+### Service image (`Dockerfile.service`)
+
+`Dockerfile.service` builds a self-contained service image for hosts with no
+local checkout: it bakes the rule binaries of the languages it serves into
+the image (en + es, ~225 MB extra; all 35 languages would be ~5.6 GB) and
+adds a small Python HTTP front-end (`docker/http_server.py`) around the
+long-lived `check_server` process:
+
+```sh
+docker build -f Dockerfile.service -t nlprule-service .
+docker run -d --name nlprule -p 8081:8080 --restart unless-stopped nlprule-service
+```
+
+Endpoints (`NLPRULE_LANGS` controls the language list):
+
+- `POST /v2/check` — **LanguageTool-compatible API** (what the LanguageTool
+  browser extension speaks): form-encoded or JSON params `text`,
+  `language` (LT codes like `es-ES` are mapped to the served base language;
+  `auto` picks between the served languages by keyword heuristic),
+  `disabledRules` / `enabledRules` / `enabledOnly` /
+  `disabledCategories` / `enabledCategories`. Response is LT-shaped:
+  `software`, `language`, `matches[]` with `message`, `replacements`,
+  character `offset`/`length` (converted from the checker's byte offsets, so
+  accented text aligns), `context`, `sentence` and `rule.category`
+  (`MORFOLOGIK_*`/`HUNSPELL*` map to `TYPOS` like LT). Fields nlprule has no
+  data for (rule message, description, issueType) are synthesized. Point the
+  LanguageTool browser extension's custom server at the container and it
+  works unchanged.
+- `POST /check` — native JSON `{"text": "...", "lang": "es"}`; same match
+  objects as above.
+- `GET /v2/languages`, `GET /languages` — the served languages.
+- `GET /health` — readiness plus which languages have their worker loaded.
+
+Per-language `check_server` children start lazily on first request (en loads
+in ~1 s, es in ~3-15 s) and stay resident afterwards. Note that
+`check_server` flushes its JSONL output after every line — required for the
+persistent-process protocol (upstream relied on stdin EOF to flush).
+
+To serve more languages, add the corresponding `COPY storage/<lang>_*.bin`
+lines in `Dockerfile.service` (and its dockerignore), set `NLPRULE_LANGS`,
+rebuild and redeploy. On a host reachable only through Portainer, a
+`docker save <image> | gzip` tar can be uploaded through the Portainer API
+proxy endpoint `POST /api/endpoints/<id>/docker/images/load` — no SSH or
+registry needed.
+
 ---
 
 A fast, low-resource Natural Language Processing and Error Correction library written in Rust. nlprule implements a rule- and lookup-based approach to NLP using resources from [LanguageTool](https://github.com/languagetool-org/languagetool).
