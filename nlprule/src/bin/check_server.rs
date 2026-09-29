@@ -44,18 +44,26 @@ fn main() {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
+    // optional NLPRULE_FULL_ID=1: emit the full nlprule source id
+    // (CATEGORY/GROUP/N) instead of the LT-facing group id, so the HTTP
+    // front-end can recover the rule category for LT-style responses
+    let full_id = std::env::var("NLPRULE_FULL_ID").map_or(false, |v| v == "1");
 
     for (i, line) in stdin.lock().lines().enumerate() {
         let text = line.unwrap();
         let mut hits: Vec<(String, usize, usize, String)> = Vec::new();
         for suggestion in rules.suggest(&text, &tokenizer) {
             // nlprule id format: CATEGORY/RULE_OR_GROUP/N -> LT id: RULE_OR_GROUP
-            let id = suggestion
-                .source()
-                .split('/')
-                .nth(1)
-                .unwrap_or(suggestion.source())
-                .to_string();
+            let id = if full_id {
+                suggestion.source().to_string()
+            } else {
+                suggestion
+                    .source()
+                    .split('/')
+                    .nth(1)
+                    .unwrap_or(suggestion.source())
+                    .to_string()
+            };
             hits.push((
                 id,
                 suggestion.span().byte().start,
@@ -69,5 +77,8 @@ fn main() {
         )
         .unwrap();
         writeln!(out).unwrap();
+        // flush per line: long-lived consumers (the HTTP front-end keeps the
+        // process open) must not wait for the 8 KB BufWriter to fill up
+        out.flush().unwrap();
     }
 }
