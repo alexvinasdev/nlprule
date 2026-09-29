@@ -292,7 +292,8 @@ def to_lt_matches(text, raw_hits):
 
 def _csv(params, key):
     v = params.get(key, [""])[0]
-    return {x for x in v.split(",") if x}
+    # LT uses comma-separated lists; the extension also sends semicolons
+    return {x for x in re.split(r"[,;]", v) if x}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -375,6 +376,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         params = self._params()
         text = params.get("text", [""])[0]
+        if not text and "data" in params:
+            # the LT browser extension sends the text as the `data` param:
+            # JSON {"annotation": [{"text": "..."}, {"markup": "<b>"}, ...]};
+            # match offsets refer to the concatenated text parts
+            try:
+                ann = json.loads(params["data"][0])
+                text = "".join(
+                    p.get("text", "") for p in ann.get("annotation", [])
+                )
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                text = ""
         if not text:
             sys.stderr.write(
                 "400 missing text: ctype=%r keys=%r\n"
