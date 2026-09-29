@@ -61,7 +61,8 @@ ES_MARKERS = frozenset(
     "el la los las de que y en un una es por con para como pero más muy porque "
     "cuando está están soy eres somos sois fue fueron sea sido tiene tengo "
     "hacer no si tú él ella ellos nosotros yo me te se lo le les al del "
-    "hola gracias dónde cómo qué quién".split()
+    "hola gracias dónde cómo qué quién buenos buenas día días dia tardes "
+    "noches usted ustedes aquí también ahora entonces siempre nunca".split()
 )
 EN_MARKERS = frozenset(
     "the a an of to in and is are was were be been being have has had do does "
@@ -85,7 +86,9 @@ def detect_language(text):
         markers = {"es": ES_MARKERS, "en": EN_MARKERS, "ca": CA_MARKERS}.get(lang, ())
         scores[lang] = sum(1 for w in words if w in markers)
         scores[lang] += 2 * sum(1 for c in LANG_ACCENTS.get(lang, "") if c in text)
-    return max(scores, key=scores.get) if scores else LANGS[0]
+    if not scores or max(scores.values()) == 0:
+        return "es"  # no signal at all: fall back to Spanish
+    return max(scores, key=scores.get)
 
 
 def normalize_lang(lang, text):
@@ -377,15 +380,35 @@ class Handler(BaseHTTPRequestHandler):
         params = self._params()
         text = params.get("text", [""])[0]
         if not text and "data" in params:
-            # the LT browser extension sends the text as the `data` param:
-            # JSON {"annotation": [{"text": "..."}, {"markup": "<b>"}, ...]};
-            # match offsets refer to the concatenated text parts
+            # the LT browser extension sends the content as the `data` param.
+            # Observed shapes: {"text": "..."} (v10 extension) and the
+            # annotation array {"annotation": [{"text": ...}, {"markup":
+            # "<b>"}]} (LT HTTP API docs); offsets refer to the concatenated
+            # text parts in the annotation case.
+            raw_data = params["data"][0]
             try:
-                ann = json.loads(params["data"][0])
-                text = "".join(
-                    p.get("text", "") for p in ann.get("annotation", [])
+                ann = json.loads(raw_data)
+                if isinstance(ann, str):  # double-encoded JSON
+                    ann = json.loads(ann)
+                if isinstance(ann, dict) and isinstance(ann.get("text"), str):
+                    text = ann["text"]
+                else:
+                    segments = (
+                        ann
+                        if isinstance(ann, list)
+                        else ann.get("annotation", []) if isinstance(ann, dict) else []
+                    )
+                    text = "".join(
+                        p.get("text", "") for p in segments if isinstance(p, dict)
+                    )
+                if not text:
+                    sys.stderr.write(
+                        "data parsed but no text: %r\n" % raw_data[:300]
+                    )
+            except (json.JSONDecodeError, AttributeError, TypeError) as e:
+                sys.stderr.write(
+                    "data parse failed (%s): %r\n" % (e, raw_data[:300])
                 )
-            except (json.JSONDecodeError, AttributeError, TypeError):
                 text = ""
         if not text:
             sys.stderr.write(
