@@ -55,6 +55,15 @@ WARM_TIMEOUT = 60.0
 
 LANG_NAMES = {"en": "English", "es": "Spanish", "ca": "Catalan"}
 
+# LT uses long codes ("ca-ES") in /v2/languages and in the check response;
+# the extension dropdown works with those, so echo them back
+LANG_LONG = {"en": "en-US", "es": "es-ES", "ca": "ca-ES"}
+LANG_VARIANTS = {
+    "en": ["en-US", "en-GB", "en-AU", "en-CA", "en-ZA", "en-NZ"],
+    "es": ["es-ES", "es-419", "es-AR", "es-MX"],
+    "ca": ["ca-ES", "ca-ES-valencia"],
+}
+
 # very small stopword models for language=auto — only needs to pick between
 # the languages this instance actually serves
 ES_MARKERS = frozenset(
@@ -79,24 +88,34 @@ CA_MARKERS = frozenset(
 LANG_ACCENTS = {"es": "ñ¿¡", "ca": "àèò"}
 
 
-def detect_language(text):
+def detect_language(text, preferred=()):
+    """Pick between the served languages. `preferred` carries the bases of
+    the client's preferredVariants (LT semantics: tie-breaker for auto
+    detection), so the extension's language preferences are honoured."""
     words = re.findall(r"[a-záéíóúüñçàèò]+", text.lower())
     scores = {}
     for lang in LANGS:
         markers = {"es": ES_MARKERS, "en": EN_MARKERS, "ca": CA_MARKERS}.get(lang, ())
         scores[lang] = sum(1 for w in words if w in markers)
         scores[lang] += 2 * sum(1 for c in LANG_ACCENTS.get(lang, "") if c in text)
+        if lang in preferred:
+            # preferredVariants: tie-breaker, earlier entries win
+            scores[lang] += len(preferred) - preferred.index(lang)
     if not scores or max(scores.values()) == 0:
-        return "es"  # no signal at all: fall back to Spanish
+        # no signal at all: fall back to Spanish or the first preferred
+        for p in preferred:
+            if p in LANGS:
+                return p
+        return "es"
     return max(scores, key=scores.get)
 
 
-def normalize_lang(lang, text):
+def normalize_lang(lang, text, preferred=()):
     """Map an LT language code ("es-ES", "en-GB", "auto", "de-DE") to a
     served language, or None if impossible."""
     lang = (lang or "").strip()
     if not lang or lang == "auto":
-        return detect_language(text)
+        return detect_language(text, preferred)
     if lang in LANGS:
         return lang
     base = lang.split("-")[0]
@@ -354,15 +373,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         if path in ("/v2/languages", "/languages"):
-            langs = [
-                {
-                    "name": LANG_NAMES.get(l, l),
-                    "code": l,
-                    "longCode": l,
-                    "nativeName": LANG_NAMES.get(l, l),
-                }
-                for l in LANGS
-            ]
+            langs = []
+            for l in LANGS:
+                for variant in LANG_VARIANTS.get(l, [LANG_LONG.get(l, l)]):
+                    langs.append(
+                        {
+                            "name": LANG_NAMES.get(l, l),
+                            "code": l,
+                            "longCode": variant,
+                            "nativeName": LANG_NAMES.get(l, l),
+                        }
+                    )
             self._send(200, langs)
         elif path == "/health":
             self._send(
@@ -420,9 +441,14 @@ class Handler(BaseHTTPRequestHandler):
                 {"error": 'missing "text"', "message": 'missing "text"'},
             )
             return
-        lang = normalize_lang(params.get("language", params.get("lang", [""]))[0], text)
+        requested = params.get("language", params.get("lang", [""]))[0]
+        preferred = tuple(
+            v.split("-")[0]
+            for v in re.split(r"[,;]", params.get("preferredVariants", [""])[0])
+            if v and v.split("-")[0] in LANGS
+        )
+        lang = normalize_lang(requested, text, preferred)
         if lang is None:
-            requested = params.get("language", [""])[0]
             sys.stderr.write(
                 "400 unsupported language %r: keys=%r\n" % (requested, sorted(params))
             )
@@ -464,12 +490,15 @@ class Handler(BaseHTTPRequestHandler):
             filtered.append((full_id, bstart, bend, repl))
 
         matches = to_lt_matches(text, filtered)
+        # echo the client's code ("ca-ES") when one was given; the extension
+        # maps response languages against its dropdown by long code
+        code_out = requested if requested and requested != "auto" else LANG_LONG.get(lang, lang)
         lang_entry = {
             "name": LANG_NAMES.get(lang, lang),
-            "code": lang,
+            "code": code_out,
             "detectedLanguage": {
                 "name": LANG_NAMES.get(lang, lang),
-                "code": lang,
+                "code": LANG_LONG.get(lang, lang),
             },
         }
         self._send(
